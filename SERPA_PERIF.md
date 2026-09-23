@@ -73,7 +73,7 @@ shared bit clock. It matches the TMS320C3x serial-port format (CLKX/FSX/DX, CLKR
 | 63 / 58 | DX1 / FSX1 | → DSP-B serial RX (BDR0/BFSR0) |
 | 51 / 49 / 50 | CLKR0 / FSR0 / DR0 | ← DSP-A serial TX (ACLKX0/AFSX0/ADX0) |
 | 48 / 46 / 47 | CLKR1 / FSR1 / DR1 | ← DSP-B serial TX (BCLKX0/BFSX0/BDX0) |
-| 56 / 55 / 54 | FREQ1 / FREQ2 / FREQ3 | frequency-measurement outputs (FREQ2 used on D1) |
+| 56 / 55 / 54 | FREQ1 / FREQ2 / FREQ3 | **clock inputs**, not outputs: on D1, **FREQ2 ← ISA OSC (14.318 MHz)**; unconnected on D39/D40/D41, which take their bit clock from the serial side. [I: word 3 low bits pick the clock source/divider] |
 | 44 | INT | → ISA **IRQ10** and **DRQ6** (via 74HCT125 D7-B/C), plus ATINT |
 | 45 | MODE | **GND on D1** (ISA mode) |
 | 40 | RESET | ← RESETDRV (D1) / ARESET or BRESET (DSP-side) |
@@ -102,8 +102,8 @@ firmware keeps a RAM shadow of every write-only register, in data segment `0x2E7
 |---|---|---|---|---|
 | 0 | `0x0390` / `0x0392` | R/W | **32-bit data word to/from DSP-A** serial channel 0 (write low then high; read low then high) | `0x261ad`, `0x26201`: `si=0` → 0x390/0x392 |
 | 1 | `0x0B90` / `0x0B92` | R/W | **32-bit data word to/from DSP-B** serial channel 1 | same functions, `si=1` |
-| 2 | `0x1390` | W | Interrupt/channel enable (shadow `[8]`; bits 2 and 3 are per-channel enables); written 0 before unhooking the IRQ | `0x2633x`, `0x263a3`, `0x26c96` |
-| 2 | `0x1390` | R | **Status**: bit 4 = channel ready/done (polled with timeout) | `0x25ea9` |
+| 2 | `0x1390` | W | Channel/interrupt/DMA control (shadow `[8]`/`[9]`). Low byte: **bit 2 = RX0 (DSP-A) enable, bit 3 = RX1 (DSP-B) enable, bit 5 = DMA source (0 = DSP-A, 1 = DSP-B)**. High byte bits 0–2: interrupt enables, saved and cleared for the duration of a DMA transfer, then restored. Written 0 before unhooking the IRQ. | `0x262cc`, `0x26c96` |
+| 2 | `0x1390` | R | **Status**: bit 0 = DSP-A word ready, bit 1 = DSP-B word ready, bit 4 = ready/done (polled with timeout) | `0x26293`, `0x263d2`, `0x25ea9` |
 | 3 | `0x1B90` | W | IAI serial-config-bus setup (shadow `[0xa]`; bits 0–2 = 1, bit 3, bits 4–5 = mode) [I: clock/format] | `0x26806` |
 | 3 | `0x1B92` | R/W | **IAI serial config bus data** — shifts a word to or from the board picked by SERSEL (AES / B5 / ANA / GEN) | `0x26a8d` (after `0x25fab` selects the target) |
 | 4 | `0x2390` | W | Serial format, TX (shadow `[0xc]`): bits 1:0 = word length/8 − 1 (8/16/24/32 bits) | `0x266e8(8,…)` |
@@ -210,6 +210,42 @@ Programmed values, by instance:
 The remaining unknowns are the exact meaning of the word 3 and word 4 upper bits, and the RX
 "bit-count" field (0x3F3 doesn't decode cleanly under the host-side formula). These only matter
 for a gate-exact replacement. A logic analyser on FSX/FSR while switching modes would settle them.
+
+### 2.8 DMA — bulk DSP → PC transfers [F + S]
+
+SERPA D1 drives **DRQ6/DACK6**, and the firmware uses **only ISA DMA channel 6**. The
+channel-5 branch of the driver exists but is never called.
+
+- **Driver `0x242d7(ch, off, seg, words)`** programs the 16-bit 8237 (ports `0xC8/0xCA`, page
+  `0x89`, mask `0xD4`, mode `0xD6`, flip-flop `0xD8`). The mode is `ch−4 | 0x04`, i.e. **demand
+  mode, device → memory (write), no auto-init**. Blocks are clipped at a 128 KB DMA page.
+  Count = 2 × 32-bit words (two 16-bit bus cycles per DSP word).
+- **Block read `0x26d75(dsp, …)`**:
+  1. `0x262cc(dsp, 1)` sets SERPA word 2: RX-enable for that DSP plus the bit 5 DMA source,
+     saves and clears the interrupt enables, and masks IRQ10 at the slave PIC (`0xA1`).
+  2. Arms DMA channel 6.
+  3. Sends the DSP a request through the normal command link (`0x26ef4`: an address/length
+     word, then a zero).
+  4. Polls the 8237 terminal-count bit (`0xD0` bit 2) up to 20 000 times, with up to 4
+     retries; on failure it reports error `0x834`/`0x835`.
+  5. `0x262cc(dsp, 2)` restores word 2 and unmasks IRQ10.
+
+So SERPA turns each 32-bit word arriving on RX0 or RX1 into two DRQ6 cycles. This is how FFT
+results and traces reach the PC.
+
+### 2.9 Sample-rate measurement is *not* in SERPA [S + F]
+
+The schematic label "F_CLK — zur Frequenzmessung" (sheet 15) belongs to discrete logic:
+
+1. The audio word clock (ALR or RX1LR, chosen by 74ACT257 D48 under control bit 10, SADR16)
+   is halved by D42-A (LR/2).
+2. D75 (74HCT40103, preset 255) counts that down. Its terminal-count pulse opens NAND D43-D.
+3. The open gate lets **15 MHz** (the DSP's H3 clock halved by D42-B) through as **F_CLK →
+   DSP-A TCLK0**.
+4. DSP-A reads its own timer-0 counter (`TIMER_ADR = 0x808020`, counter at `+4`) in the sample
+   ISR and stores it in `FREQ_COUNTER_VAL`. The host turns that into the displayed sample rate.
+
+SERPA's FREQ1–3 pins are clock inputs (§2.1), not part of this.
 
 ---
 
@@ -359,8 +395,10 @@ Bit 6 is the direction and bit 7 the step pulse. It resets to mid-scale (`0x20`)
 
 ## 5. Next steps, in order of value
 
-1. SERPA is done as far as the firmware goes (host + DSP sides, §2.3–2.7). What's left is
-   bit-level format detail that needs a logic analyser.
+1. SERPA is done as far as the firmware goes (host + DSP sides, DMA, §2.3–2.9). What's left
+   needs hardware: the word 3/4 upper bits and the RX bit-count field (logic analyser on
+   FSX/FSR/CLKX), the IAI config-bus word format, what the INT0/INT1 inputs (SDA, GINT) do
+   inside the chip, and the UFS source on DSP-B.
 2. PERIF2 is done as far as the firmware goes. Registers 6 and 8–10 and reg 14 bit 7 can only
    be named by experiment (a replacement design could simply latch them).
 3. Record the setup-RAM battery (G2, 3.4 V) as a maintenance item and back up the RAM
