@@ -202,6 +202,65 @@ The CPU board is the **least R&S‑proprietary part** and is replaceable from th
   concern above now has a data point: at least up to the MediaGX's ~300 MHz there's no problem.
   Much faster boards remain untested.
 
+### Custom silicon and stored state — what dies how (Service Manual Vol.2, 2026‑09‑23)
+
+Question asked: if an ASIC dies, is there proprietary firmware inside? Answer from the Service
+Manual Vol.2 parts lists (text layer of scanned pages, so OCR-noisy — see caveats), plus the
+firmware binary:
+
+| Part | Board | Kind | Holds code/data? | If it dies |
+|---|---|---|---|---|
+| **SERPA, `8002-713`** (made by **VLSI**, R&S stock 1030.8570.00) | Digital 1078.2708 | custom **gate array** | **No** — logic fixed in the metal at manufacture | Irreplaceable except from a donor. **Several instances**: the parts list pairs it with positions D1–D5, and schematic sheets label instances for the generator (`GEN_SERPA`), analyzer (`ANA SERPA`) and DSP sections (`DSP-B SERPA`). Name suggests SERial/PArallel converter — an inference, not documented. |
+| **PERIF2, `L5A8612`** | Digital 1078.2708 | custom **ASIC**, "KEYBOARD INTERF." | **No** | Donor only. Drives the front-panel keys/encoder. |
+| **Xicor `X24164`**, 2K × 8 serial EEPROM | Digital 1078.2708 | standard part | **Yes — the only chip on the R&S boards with unique per-unit data** | The chip is trivially replaceable; its *contents* are not. See below. |
+| TMS320C31 DSP × 2 | Digital | standard TI | No on-board code: `A.OUT`/`B.OUT` are loaded from disk at boot (see architecture notes) | Obsolete but standard. |
+| Cirrus `GD6205` LCD/VGA, NI `TNT4882C` GPIB, SMC `FDC37C665` FDC, `MAX239` RS-232 | Digital | standard | No | Obsolete standard parts; used/NOS. |
+
+**No EPROM, PROM, flash, PAL or GAL appears in any R&S board's parts list.** Every piece of
+firmware — `UPL_UI.EXE`, the DSP images — lives on the hard disk, so the disk image covers it.
+The custom chips carry no firmware at all: there is nothing inside them to back up or reverse
+engineer, and nothing that would stop a donor chip working. Their risk is purely *supply*.
+
+**Practical consequence: a donor Digital Board 1078.2708 is the single most valuable spare.**
+It covers every SERPA position, PERIF2, and all the obsolete standard parts in one go. **But** the
+donor's X24164 holds the *donor's* identity/calibration, so a board swap means carrying this unit's
+EEPROM contents across — which is why backing those contents up now matters.
+
+**Caveats:** SERPA instance count (D1–D5) comes from OCR'd parts-list layout; the schematic OCR
+also reads the part number as something like "8002-716" in three places, which may be a misread
+of `-713` or a second variant — check the chip markings. One schematic sheet OCRs a stray "PAL"
+too garbled to call; no PAL appears in any parts list.
+
+#### Reading the EEPROM over RS-232 — a strong lead, unverified
+
+R&S's own selftest reads the serial number with the undocumented `DIAG:DEV` command:
+```
+DIAG:DEV SERN ; DIAG:DEV:ADDR 0 ; DIAG:DEV:DATA? ; DIAG:DEV:ADDR 1 ; DIAG:DEV:DATA?
+```
+`DIAG:DEV` is not in the Vol.2 manual (only a password-protected DIAGNOSTIC menu is mentioned).
+In `UPL_UI.EXE`'s command-keyword table, `SERNumber` sits in a run of what look like the other
+selectable devices:
+```
+DSPA  DSPB  RX1  RX2  TX1  TX2  SERNumber  INSTkey  CLDG  CAGEn  CANLr0  CDPHase
+RTEMperature  REG  PIN  ENPin  CALDcout
+```
+Reading: `CAGEn` / `CANLr0` / `CLDG` / `CDPHase` = calibration tables (generator, analyzer,
+low-distortion generator, phase); `INSTkey` = this unit's own installed option key;
+`RTEMperature` = a temperature sensor; `DSPA/DSPB`, `RX/TX` = DSP and serial-link access. **If
+right, the same read sequence with those selectors would back up the per-unit state over RS-232,
+without opening the case.** Inferred from the table's layout, not confirmed — only `SERN` has
+been seen in use.
+
+Rules if this gets tried:
+- **Read only.** Only ever `DIAG:DEV:DATA?` (with the `?`). Never send `DIAG:DEV:DATA <value>`:
+  a write path almost certainly exists and could corrupt calibration.
+- **Skip `REG`, `PIN`, `ENPin`, `CALDcout`, `DSPA/B`, `RX/TX`** — they sound like live hardware
+  pokes; selecting them may have side effects.
+- Start with `SERN` (proven), then `CAGEn`, `CANLr0`, `CLDG`, `CDPHase`, `INSTkey`. Check
+  `SYST:ERR?` after every step; walk `ADDR` upward until it errors to find each table's size.
+- Compare against `SETUP/CAL_*.SET` on the disk: calibration may be held in both places, in which
+  case the disk image already covers it and the EEPROM dump is belt and braces.
+
 ### Longevity action plan (priority order)
 1. **Image the mainframe boot disk (raw) and archive the calibration data NOW** — the only
    irreplaceable state. (Board is replaceable; its stored state is not.) **Also photograph every
@@ -214,6 +273,11 @@ The CPU board is the **least R&S‑proprietary part** and is replaceable from th
    VGA/IDE/FDC disabled, as the second option if no suitable ETX module turns up.
 4. **Measure the CMOS battery** (Renata CR2477N on the carrier) — after step 1's BIOS photos, not
    before.
+5. **Try a read-only `DIAG:DEV` dump of the per-unit state** (serial, option key, calibration
+   tables) over RS-232 — see "Reading the EEPROM over RS-232" above for the rules. If it works,
+   it's the no-screwdriver backup of the one chip whose contents can't be replaced.
+6. **Keep an eye out for a donor Digital Board 1078.2708** — it covers every custom chip (the
+   SERPA gate arrays and PERIF2) in one part.
 
 ## Installed options (confirmed by user, 2026‑09‑22) — ALL options fitted
 
