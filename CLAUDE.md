@@ -1257,6 +1257,68 @@ otherwise equivalent within ~1 dB. Ours reads consistently slightly *low* on gen
 level while theirs reads slightly high; at 5–10 % of the tolerance that's not meaningful, but it's a
 number to watch across future selftests.
 
+### UPL‑B1 low-distortion generator — how it works, and the community KiCad redraw (2026‑09‑23)
+
+Sources: R&S *Service Manual UPL‑B1* (board **1031.2699**, drawn 1993, originally for the UPD —
+title block says "UPD‑B1"), and **github.com/bvksound/UPL-B1**, a KiCad 9 re-creation by BVKSound
+(the same person behind the shared Drive archive and the B23 repack). The repo carries an
+identical copy of the R&S manual (same 2,098,935-byte file).
+
+**How it works** (from R&S's drawings; KiCad part names in brackets):
+- **Oscillator core — a two-integrator loop.** Integrator 2 (**N42, HA‑5221**) → `SIN`;
+  Integrator 1 (**N32, HA‑5221**) → `COS`; a summing amplifier (**N35**) inverts and closes the
+  loop. Two 90° integrators plus an inversion give 360°, so it oscillates at f = 1/(2πRC) — and
+  because an integrator loop needs no amplitude-dependent gain element in the signal path, the
+  sine is intrinsically very clean. Loop amplitude ≈ **2.7 V rms**, **10 Hz – 110 kHz**.
+- **Frequency: decades by capacitor, fine by DAC.** Each integrator has JFET-switched (2N5432)
+  feedback capacitors — **560 pF / 2.2 nF / 33 nF / 330 nF**, 1 % film on the critical ones — for
+  four ranges: 110–22 kHz, 22–1.8 kHz, 1.8 kHz–185 Hz, 185–10 Hz. Within a range, a **DAC8143
+  12‑bit multiplying DAC** (D40, D30) with a JFET-switched 0.1 % resistor network sets the
+  integrator's effective input resistance. A third DAC8143 (**D32**, "FREQ TUNE", V = 1.0…0.0)
+  feeds a scaled `COS` into the loop summing amp.
+- **Both integrators are tuned by identical words — by wiring.** The serial data link branches:
+  D21's output feeds Integrator 2's DAC+register (D40→D41, whose serial outputs are left
+  unconnected) *and* Integrator 1's (D30→D31→D32→…) in parallel. Every frequency word lands in
+  both at once, so the two integrators always match, keeping `SIN`/`COS` in exact quadrature.
+- **Level control — sampled, not rectified.** A temperature-compensated **1N827 (−6.2 V)**
+  reference is summed with `COS` (N51). **N52, an LM211**, squares `SIN`; **D50 (74HC132)**
+  turns its edges into track-and-hold pulses (V505–V508). Two T&H stages (V504/C504/N53,
+  V510/C511/N55) sample that sum, a regulator integrator (N54) filters it, and an **MC1595
+  four-quadrant multiplier (D51, with N56)** feeds the correction back into the loop. My reading
+  (inferred from the topology, not stated by R&S): `SIN`'s zero crossings are exactly `COS`'s
+  peaks, so sampling there measures peak amplitude with **no rectifier ripple**, and holding the
+  value between samples means the loop gain isn't modulated within a cycle. That's how the B1
+  reaches the **−122 dB THD** measured on this unit (2026‑09‑22).
+- **Output:** a fourth DAC8143 (**D22**, with **N20**) gives 0 … −20 dB, a relay (**K2**) switches
+  the path, out to `LOW DIST` on X1A pin 16.
+- **Board ID:** **D23 (74HC165)**, a parallel-in shift register at the end of the chain, read back
+  on `SDO`. Probably how the UPL detects the option is fitted (the install sheet says it's
+  recognized automatically).
+
+**Is the KiCad PDF correct? Checked 2026‑09‑23 — no electrical errors found in what was checked:**
+- **Parts:** the full R&S XY list (306 entries, pp.18–20, transcribed from the scans) against the
+  KiCad sources (309 parts): **302 match by designator.** The rest are explained: R&S's X1A/C/D =
+  KiCad's single X1; R543/C523 (N52 supply filter) and X50–X52 (3‑pin solder bridges on the
+  ALC's COS, SIN and control lines) **are in R&S's drawing** but not its XY list — R543/C523 are
+  numbered after the XY list's last entries, so likely a later R&S modification; the bridges are
+  PCB features, not components. Unresolved: R&S `HVC` (listed on sheet 6) has no KiCad
+  counterpart; KiCad `X4` (a 6‑pin power/ENABLE header) wasn't found in R&S's list — not checked
+  against the drawing.
+- **Block diagram:** same blocks, designators and signal flow, including the branched data link.
+- **Integrator 2 sheet, in full:** every value, tolerance, part type and pin number matches.
+- **The spot the KiCad author flagged** ("the bodge is documented dodgey"): matches R&S.
+  R512 2K21 is the LM211's open-collector pull-up; R522 22R1 + C508 10 µF filter D50's supply.
+- **Cosmetic only:** the block diagram's note says "C551" where R&S has **C511** (the part itself
+  is right); LM339 unit letters differ (R&S N41‑A = KiCad N41C, etc.) but **pin numbers are
+  identical**; one `/WR` net is deliberately renamed (noted on the sheet).
+- **Not verified at value/wiring level:** Integrator 1 & loop inverter, the output attenuator,
+  and most of the ALC sheet (designators checked, circuits not).
+- The repo's **README** is fluent but imprecise against the schematics: it calls the
+  integrator DACs "fine tuning" (they're the main in-range control, alongside D32), says the
+  integrator RC networks are relay-switched (they're JFET-switched; the only relay, K2, is in the
+  output stage), and describes the output attenuator as relay resistor networks (it's the D22
+  DAC). Trust the schematics over the README.
+
 ### UPL‑B1 calibration procedure (from the B1 service manual install sheet)
 
 OPTIONS panel → **CALIBRATION GEN LOW DIST → ONCE**; runs automatically, no external instruments
