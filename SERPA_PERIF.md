@@ -229,22 +229,22 @@ Port table in data segment `0x2E5C` at offsets `0x0C–0x2A`; the same table app
 **Writes**: one generic routine, `0x24955(n)`, assembles each register from shadow fields at
 DS:`0x40–0x4F` and does `out`:
 
-| n | Port | Value written | Power-on default |
-|---|---|---|---|
-| 0 | `0x4390` | `[42]<<7 \| [41]<<4 \| [40]` | `0xC2` |
-| 1 | `0x4392` | `0x80 \| [44]<<4 \| [43]` | `0x94` |
-| 2 | `0x4B90` | `[45]` | `0x04` |
-| 3 | `0x4B92` | `0x30 \| [46]` | `0x30` |
-| 4 | `0x5390` | `[48]` | `0x02` |
-| 5 | `0x5392` | `[47]` | `0x02` |
-| 6 | `0x5B90` | `[49]` | `0xFF` |
+| n | Port | Value written | Function (see §3.2a) | Shadow default → **value after init** |
+|---|---|---|---|---|
+| 0 | `0x4390` | `[42]<<7 \| [41]<<4 \| [40]` | Scan tick: bits 3:0 mantissa m₀ (2–15), bits 6:4 decade e₀ (0–4), **bit 7 auto-repeat enable** | `0xC2` → **`0xC7`** |
+| 1 | `0x4392` | `0x80 \| [44]<<4 \| [43]` | Auto-repeat **rate** divider: bits 3:0 m₁ (2–15), bits 6:4 e₁ (0–2), bit 7 always 1 | `0x94` → **`0x8B`** |
+| 2 | `0x4B90` | `[45]` | Auto-repeat **delay**, in repeat periods (2–31) | `0x04` → **`0x05`** |
+| 3 | `0x4B92` | `0x30 \| [46]` | Encoder: bits 3:0 = acceleration factor (1 = off, 2–15), bits 5:4 always 1 | `0x30` → **`0x39`** |
+| 4 | `0x5390` | `[48]` | Encoder acceleration window, in units of 4096/(OSC/2) ≈ 0.572 ms (2–255) | `0x02` → **`0x24`** |
+| 5 | `0x5392` | `[47]` | Encoder sample/debounce period, same unit (2–255) | `0x02` → **`0x12`** |
+| 6 | `0x5B90` | `[49]` | Never changed by the firmware [I: PIO direction, 0xFF = all outputs] | `0xFF` |
 | 7 | `0x5B92` | `[4A]` — **PIO output port** (bit *n* = pin PIO*n*): bits 0–5 → front panel via X2 19–24; bit 6 → VEECTRL; bit 7 → LCD connector. Firmware sets and clears single bits via `0x2583c`/`0x25869`, and bits 4/5 as a pair via `0x25896`. | `0xFF` |
 | 8 | `0x6390` | `[4B]` | `0x00` |
 | 9 | `0x6392` | `[4C]` | `0x00` |
 | 10 | `0x6B90` | `0xFF` constant | — |
 | 11, 12 | `0x6B92`, `0x7390` | rejected (−2): not writable | — |
 | 13 | `0x7392` | `0` | — |
-| 14 | `0x7B90` | `[4D] \| [4E]<<3 \| [4F]<<7` | `0x09` |
+| 14 | `0x7B90` | `[4D] \| [4E]<<3 \| [4F]<<7` — **interrupt enable**: bit 0 = key IRQ, bit 3 = encoder IRQ (the same bit positions as the status read at `0x5B92`), bit 7 = a separate flag toggled by `0x25656` (purpose unknown) | `0x09` |
 | 15 | `0x7B92` | `0` | — |
 
 *Correction to the first pass:* write `0x5B92` was first labelled an "interrupt mask". The
@@ -252,10 +252,44 @@ schematic shows that the PIO pins are the only general outputs, and firmware bit
 register are the contrast lines, so it is the PIO output latch. The *read* at the same address
 is the interrupt status (different registers, same address).
 
-The meanings of the n = 0–6 and 8–14 fields still need their callers traced. With the pinout
-known, they must be scan/debounce timing, encoder mode, PIO direction and interrupt enables,
-because PERIF2 has no other outputs. Only the key, encoder and PIO/contrast paths are pinned
-down.
+Registers 8 and 9 (`0x6390`/`0x6392`) are written 0 at init and never changed. Register 10 is
+always written `0xFF`, and 13/15 are always written 0. Nothing in the firmware reveals their
+function.
+
+### 3.2a How the settings are computed [F]
+
+The PERIF2 setup code (`0x258f8`, `0x259b4`, init at `0x25ceb`) works in seconds and hertz
+using Borland's floating-point emulator (`int 34h–3Dh`; decode by rewriting `CD 34+n` →
+`9B D8+n`). All timing derives from the **ISA OSC (14 318 180 Hz, a literal in the data
+segment) divided by 2**, which feeds CLK1. Divider fields use a **mantissa × 10^decade** format,
+searched for the closest match by `0x24a6e`.
+
+**Key scan and auto-repeat** (`0x258f8(tick, rate, delay)`; init passes 0.01 s, 9.0 Hz, 0.5 s):
+
+| Stage | Formula | Init request | Programmed | Actual |
+|---|---|---|---|---|
+| Scan tick T₀ (reg 0) | 2/OSC · m₀ · 10^e₀ | 10 ms | m₀=7, e₀=4 → `0xC7` | **9.78 ms** |
+| Repeat period T₁ (reg 1) | T₀ · m₁ · 10^e₁ | 9 Hz | m₁=11, e₁=0 → `0x8B` | **107.6 ms (9.30 Hz)** |
+| Repeat delay (reg 2) | T₁ · m₂ | 0.5 s | m₂=5 → `0x05` | **0.538 s** |
+
+Requesting a rate ≤ 0 clears reg 0 bit 7, which disables auto-repeat.
+
+**Rotary encoder** (`0x259b4(accel, sample, window)`; init passes 9, 10 ms, 20 ms):
+
+| Field | Formula | Init | Programmed |
+|---|---|---|---|
+| Sample/debounce period (reg 5) | n = round(t / 0.572 ms + 1), clamped 2–255 | 10 ms | `0x12` (9.73 ms) |
+| Acceleration window (reg 4) | same | 20 ms | `0x24` (20.0 ms) |
+| Acceleration factor (reg 3, low nibble) | clamped 1–15 | 9 | `0x39` |
+
+The interrupt handler divides the raw encoder count by 2 and keeps the remainder, so there are
+**2 counts per detent**. When acceleration is on (factor ≥ 2) and a single interrupt reports more
+than 4 steps, it **multiplies by 9**. `0x25caa(on)` is the public on/off switch: it reprograms
+the same registers with factor 9 or 1.
+
+**Interrupts:** init enables key (bit 0) and encoder (bit 3) interrupts in reg 14 through
+`0x256b7(0)` and `0x256b7(3)`. Shutdown (`0x25bfb`) clears them with `0x25710`, then restores
+the original INT 72h vector.
 
 **LCD contrast** (`CONTRAST.EXE`, "sets the contrast voltage for B/W LCDs"): PIO6 (inverted →
 VEECTRL) and PIO7 drive a **64-step up/down digital potentiometer**, presumably on the LCD side.
@@ -290,7 +324,7 @@ Bit 6 is the direction and bit 7 the step pulse. It resets to mid-scale (`0x20`)
 
 1. Disassemble `A.OUT`/`B.OUT` (TMS320C3x) for accesses to `0xC00000–0xC0000F` / `0xA00000`.
    That gives the DSP-mode register map and completes SERPA.
-2. Trace the callers that set PERIF2 fields `[0x40–0x4F]` (`0x247bf` onward in the same
-   module) to name the remaining PERIF2 registers.
+2. PERIF2 is done as far as the firmware goes. Registers 6 and 8–10 and reg 14 bit 7 can only
+   be named by experiment (a replacement design could simply latch them).
 3. Record the setup-RAM battery (G2, 3.4 V) as a maintenance item and back up the RAM
    contents over RS-232 if `DIAG:DEV` can reach it.
