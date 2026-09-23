@@ -335,6 +335,53 @@ def cmd_autoexport(upl, args):
     return 0
 
 
+STATE_TMP = "C:\\UPL\\USER\\UPLTMP.SCO"
+
+
+class preserve_state:
+    """Snapshot the UPL's complete setup, restore it afterwards, delete the scratch file.
+
+    Lifted straight from R&S's own shipped FLAT_GEN.BAS macro, which brackets its
+    calibration exactly this way:
+
+        MMEM:STOR:STAT 2,'\\upl\\user\\upl.tmp'    ; snapshot
+        MMEM:LOAD:STAT 0,'...flat_gen.sac'        ; reconfigure freely
+        ... measure ...
+        MMEM:LOAD:STAT 2,'\\upl\\user\\upl.tmp'    ; restore
+        MMEM:DEL '\\upl\\user\\upl.tmp'
+
+    Mode 2 is the COMPLETE instrument setup (.SCO); mode 0 is the current setup
+    (.SAC) -- Vol.2 sec 3.10.5.1. This is a much better neighbour than opening with
+    a bare `*RST`, which throws away whatever the user had configured by hand.
+    `*RST` inside the block is still fine: the snapshot is what puts it back.
+
+    Opt-in for now (`--preserve`): it writes a file to the instrument's disk, and
+    like everything else added on 2026-09-23 it has not been run against hardware.
+    Restore is best-effort -- a failure to restore must not mask a measurement error."""
+
+    def __init__(self, upl, path=STATE_TMP, enabled=True):
+        self.upl, self.path, self.enabled = upl, path, enabled
+
+    def __enter__(self):
+        if self.enabled:
+            self.upl.write(f"MMEM:STOR:STAT 2,'{self.path}'")
+            err = self.upl.query("SYST:ERR?")
+            if not err.startswith("0,"):
+                print(f"WARNING: could not snapshot instrument state ({err}); "
+                      "continuing without restore.", file=sys.stderr)
+                self.enabled = False
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if self.enabled:
+            try:
+                self.upl.write(f"MMEM:LOAD:STAT 2,'{self.path}'")
+                self.upl.write(f"MMEM:DEL '{self.path}'")
+            except Exception as e:      # never mask the real error
+                print(f"WARNING: failed to restore instrument state: {e}", file=sys.stderr)
+        return False
+
+
 FFT_BLOCK = 1024          # TRAC? never returns more than 1024 values (Vol.2 sec 3.15.11.2.1)
 FFT_MAX_BLOCKS = 8        # DISP:TRAC:IND 0..7 for FFT block paging (Vol.2 sec 3.15.11.2.2)
 
@@ -413,10 +460,19 @@ def cmd_nsweep(upl, args):
     NOT YET VERIFIED AGAINST HARDWARE (written 2026-09-23 from the documentation
     after the earlier live attempt failed on SWE2 + missing FEED). Run with
     --dry-run first to inspect the sequence."""
+    with preserve_state(upl, args.state_file, enabled=args.preserve):
+        return _nsweep(upl, args)
+
+
+def _nsweep(upl, args):
     feed = FEED_CHOICES[args.feed]
 
     if args.reset:
         upl.write("*RST;*WAI")
+    if args.setup:
+        # R&S's own FLAT_GEN.BAS configures a measurement this way rather than by
+        # sending every panel setting: MMEM:LOAD:STAT 0,'<name>.SAC'.
+        upl.write(f"MMEM:LOAD:STAT 0,'{args.setup}'")
 
     # ASCii => TRAC? replies are comma-separated text. FORM REAL would return a
     # 488.2 binary block with no delimiter, which has no EOI to end it on RS232.
@@ -499,6 +555,11 @@ def cmd_fft(upl, args):
 
     Replaces the single `TRAC? TRAC1` that silently truncates to the first
     1024 lines. See read_fft() for the mechanism and CLAUDE.md for the history."""
+    with preserve_state(upl, args.state_file, enabled=args.preserve):
+        return _fft(upl, args)
+
+
+def _fft(upl, args):
     if args.reset:
         upl.write("*RST;*WAI")
     upl.write("FORM ASC")
@@ -657,8 +718,8 @@ def cmd_seqcheck(upl, args):
     stub = DryRunUPL(points=6, echo=False)
     ns = _ap.Namespace(
         func="RMS", feed="func1", start=20, stop=20000, points=40, spacing="log",
-        volt=None, both=False, reset=True, restore=True, output=None,
-        timeout=10.0, sweep_timeout=120.0,
+        volt=None, both=False, reset=True, restore=True, output=None, setup=None,
+        timeout=10.0, sweep_timeout=120.0, preserve=False, state_file=STATE_TMP,
     )
     import io, contextlib
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -708,7 +769,7 @@ def cmd_seqcheck(upl, args):
     ff = _ap.Namespace(
         size="8192", zoom=1, center=None, window="BLACkman_harris", digital=False,
         max_blocks=FFT_MAX_BLOCKS, reset=True, output=None,
-        timeout=10.0, fft_timeout=120.0,
+        timeout=10.0, fft_timeout=120.0, preserve=False, state_file=STATE_TMP,
     )
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
@@ -740,6 +801,25 @@ def cmd_seqcheck(upl, args):
         failures.append("fft_line_count: disagrees with Vol.1 sec 2.6.5.12")
     else:
         print("  fft_line_count: 3744 analog / 4064 digital / 7488 zoomed, per Vol.1 2.6.5.12")
+
+    # --- preserve_state brackets the measurement (FLAT_GEN.BAS idiom) ---
+    stub4 = DryRunUPL(points=6, echo=False)
+    ns2 = _ap.Namespace(**{**vars(ns), "preserve": True})
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        cmd_nsweep(stub4, ns2)
+    snap = f"MMEM:STOR:STAT 2,'{STATE_TMP}'"
+    rest = f"MMEM:LOAD:STAT 2,'{STATE_TMP}'"
+    check("preserve", stub4.sent, required=[snap, rest, f"MMEM:DEL '{STATE_TMP}'"])
+    if snap in stub4.sent and rest in stub4.sent:
+        if stub4.sent.index(snap) != 0:
+            failures.append("preserve: the snapshot must be the very first command")
+        if stub4.sent.index(rest) < stub4.sent.index("INIT:CONT OFF;*WAI"):
+            failures.append("preserve: restore must come after the measurement")
+        if "*RST;*WAI" in stub4.sent and stub4.sent.index("*RST;*WAI") < stub4.sent.index(snap):
+            failures.append("preserve: *RST must not precede the snapshot")
+    # and stays out of the way when not asked for
+    if any(c.startswith("MMEM:STOR:STAT") for c in stub.sent):
+        failures.append("preserve: snapshotted without --preserve")
 
     # --- parse_values error path ---
     for bad in ("No Values", ""):
@@ -781,6 +861,11 @@ def main():
     p.add_argument("--opc", action="store_true", help="use *OPC? to wait instead of a fixed delay")
     p.add_argument("--dry-run", action="store_true",
                    help="do not open a serial port; print the SCPI that would be sent and use canned replies")
+    p.add_argument("--preserve", action="store_true",
+                   help="snapshot the UPL's complete setup before the measurement and restore it after "
+                        "(MMEM:STOR/LOAD:STAT 2, the FLAT_GEN.BAS idiom); writes a scratch file on the UPL")
+    p.add_argument("--state-file", default=STATE_TMP,
+                   help=f"scratch path on the UPL used by --preserve (default {STATE_TMP})")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("probe", help="send *IDN? to confirm remote control (UPL-B4) is live")
@@ -809,6 +894,7 @@ def main():
                    help="what feeds trace A (default func1 = SENSe1:DATA1, the measured function on ch1)")
     n.add_argument("--volt", type=float, help="generator level in V, if it should be set")
     n.add_argument("--both", action="store_true", help="also feed and capture trace B (channel 2)")
+    n.add_argument("--setup", help="UPL setup file to MMEM:LOAD:STAT 0 first, e.g. C:\\UPL\\MYSETUP.SAC")
     n.add_argument("--no-reset", dest="reset", action="store_false", help="skip the leading *RST")
     n.add_argument("--no-restore", dest="restore", action="store_false",
                    help="leave the generator in sweep mode afterwards (default restores FIX)")

@@ -853,6 +853,99 @@ longer settle after the frequency change.
   reads — always check for it before trusting a numeric parse, not just on the specific queries
   noted earlier.
 
+## `FLAT_GEN.BAS` — generator flatness calibration (decompiled 2026‑09‑23)
+
+No loose copy exists on this PC. It lives only inside `DISK2/USER.LZH`
+(`python scratchpad/lzh_extract.py DISK2/USER.LZH FLAT_GEN.BAS`), and ships to `C:\UPL\USER\` on
+the instrument. Runs as a UPL‑B10 macro (we have B10). Companion setup `FLAT_GEN.SAC` is in the
+same archive.
+
+**What it is for.** It creates or deletes `C:\UPL\REF\FLAT_GEN.CAL`, the **generator frequency‑
+response equalization file**. Vol.1 §2.6.9: the analyzer already has an rms frequency‑response
+calibration, but for measurements using the *internal* generator the combined residual
+generator+analyzer response can be flattened further by this instrument‑specific file. The file's
+mere presence at boot enables the correction; deleting/renaming it and restarting disables it.
+
+**Program flow** (SCPI in caps, DOS shell-outs in lower case):
+```
+                                  ; does C:\UPL\REF\FLAT_GEN.CAL exist? -> menu E / D / A
+Disable_flatness:
+  del \upl\ref\flat_gen.cal       ; DOS shell, not MMEM:DEL -- the file is read at boot
+  SOUR:FUNC SIN
+Execute_flatness:
+  del \upl\ref\flat_gen.cal                      ; if one was already there
+  MMEM:STOR:STAT 2,'\upl\user\upl.tmp'           ; snapshot COMPLETE instrument state (.SCO)
+  MMEM:LOAD:STAT 0,'\upl\user\flat_gen.sac'      ; load the calibration setup
+  INIT:CONT OFF;*WAI                             ; run the calibration sweep ("several minutes")
+  MMEM:STOR:LIST EQU,'\upl\ref\flat_gen.cal'     ; store the result as the equalization list
+  SOUR:SWE:MODE AUTO;:SOUR:FREQ:MODE SWE1        ; then an A/B check:
+  DISP:TRAC:COUN 2
+  INIT:CONT OFF;*WAI                             ;   trace 1 = uncalibrated
+  SOUR:FUNC SIN
+  INIT:CONT OFF;*WAI                             ;   trace 2 = calibrated
+                                  ; "Flatness okay? 'D' to disable, any other key to accept"
+  MMEM:LOAD:STAT 2,'\upl\user\upl.tmp'           ; restore the caller's state
+  MMEM:DEL '\upl\user\upl.tmp'
+```
+
+**Why this matters to our measurements.** Every DCX2496 / M51 frequency‑response sweep we run with
+the UPL as generator inherits whatever state this is in, and we have never checked it.
+**Worth doing at the next live session: `MMEM:CAT? 'C:\UPL\REF'` and look for `FLAT_GEN.CAL`.**
+Two caveats straight from Vol.1 §2.6.9 before enabling it:
+- The .cal contains the **inverted residual analyzer response as well as the generator's**. If the
+  generator is driven into an *external* analyzer, R&S says the correction can make the pure
+  generator response *worse* — don't use it for that.
+- It slows generator frequency setting (both frequency and level must be set per point); R&S puts
+  the hit at under 10 % on a sweep.
+- Enabling/disabling by hand needs a **restart** to take effect. The macro handles this itself.
+
+**Does it exercise the native sweep we were trying to get working remotely? Partly — checked, not
+assumed.** Grepping the decompiled source for each subsystem:
+```
+SWE   : SOUR:SWE:MODE AUTO;:SOUR:FREQ:MODE SWE1      <- yes, exactly our config
+INIT  : init:cont off;*wai   (x3)                    <- yes, our trigger
+TRAC  : DISP:TRAC:COUN 2                             <- trace COUNT only
+FEED  : -- none --                                   <- does NOT set DISP:TRAC:FEED
+SENS  : -- none --
+CALC  : -- none --
+FORM  : -- none --
+```
+So it independently corroborates the **SWE1** half (and this is R&S's own shipped firmware, not an
+app note — a third independent confirmation), but it is **silent on the FEED half**, which remains
+the one piece of the fix with no corroborating usage anywhere. It also never reads a trace over the
+bus at all: it gets its result out with `MMEM:STOR:LIST EQU,'file'`. Its measurement and display
+configuration comes from `flat_gen.sac`, and that is an opaque binary setup blob — checked, it
+holds file references and encoded panel state, not readable SCPI — so it cannot tell us whether
+FEED is set there either.
+
+**Useful consequence:** it demonstrates R&S's own preferred way to configure a measurement —
+`MMEM:LOAD:STAT 0,'<name>.SAC'` rather than sending every panel setting — plus a result path that
+sidesteps trace readout entirely. If `DISP:TRAC:FEED` turns out not to be sufficient at the
+instrument, `nsweep --setup <file.SAC>` followed by `storetrace` is a fallback built only from
+commands now confirmed in shipped firmware. `--setup` was added to `nsweep` for exactly this.
+
+**New/confirmed SCPI from this program:**
+- `MMEM:STOR:LIST EQU,'file'` — store equalization list. Vol.2 §3.10.5.1.3 documents the family:
+  `CALC:EQU:FEED TRACe1|TRACe2` (which trace the amplitude data comes from),
+  `CALC:EQU:NORMfreq <Hz>` (frequency normalized to), `CALC:EQU:INVert ON|OFF` (store inverted or
+  not), `MMEM:STOR:FORM BIN|ASCii`. Read back with `MMEM:LOAD:LIST EQUalize,'file'` and applied via
+  `SOUR:VOLT:EQU:STAT`.
+- **`MMEM:STOR:STAT 2,'file'` / `MMEM:LOAD:STAT 2,'file'` as a scratch state snapshot/restore** —
+  mode 2 = *complete* instrument setup (.SCO), vs mode 0 = current setup (.SAC). This is a much
+  better guardrail than our scripts' habit of opening with `*RST`, which discards whatever the user
+  had set up. **Adopted 2026‑09‑23** as `preserve_state` in `upl_capture.py`, available on `nsweep`
+  and `fft` via `--preserve` (+ `--state-file`). Note it *brackets* `*RST` rather than replacing it:
+  a known state is still wanted inside the block, the snapshot is what puts the user's setup back
+  afterwards. Opt-in, because it writes a scratch file to the instrument's disk and, like the rest
+  of 2026‑09‑23's work, has not met hardware yet. Restore is best-effort so it can't mask a real
+  measurement error. `seqcheck` asserts the snapshot is the first command, that `*RST` never
+  precedes it, that restore follows the measurement, and that nothing is written without the flag.
+- `DISP:TRAC:COUN 2` — number of displayed traces; pairs with the `DISP:TRAC:IND 0..17` trace
+  selection used for FFT block paging.
+- `SOUR:FUNC SIN`, `MMEM:DEL '<file>'`.
+- `INIT:CONT OFF;*WAI` as the single-sweep trigger — a third independent confirmation, now also
+  from R&S's own shipped firmware rather than an app note.
+
 ## Application Notes catalog (digested 2026‑09‑22)
 
 Folder: `Application Notes/` (one dir up from this project, alongside the manuals). 14 PDFs +

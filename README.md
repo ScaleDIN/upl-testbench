@@ -117,6 +117,23 @@ the readout was returning the wrong eighth of it. `CLAUDE.md`'s "FFT zoom quirk 
 has the full arithmetic. Note that over the bus you set the zoom **factor**, never the SPAN
 (`CALC:TRAN:FREQ:SPAN?` is query-only).
 
+### Not clobbering the instrument's setup (`--preserve`)
+
+`nsweep` and `fft` start with `*RST`, which throws away whatever you had configured on the front
+panel. `--preserve` brackets the whole measurement with a snapshot/restore instead — the idiom R&S
+uses in its own shipped `FLAT_GEN.BAS` macro:
+
+```bash
+python upl_capture.py --port COM7 --preserve nsweep --points 40 -o fr.csv
+```
+
+That sends `MMEM:STOR:STAT 2,'C:\UPL\USER\UPLTMP.SCO'` first (mode 2 = the *complete* setup), does
+its thing, then `MMEM:LOAD:STAT 2` + `MMEM:DEL`. Override the scratch path with `--state-file`.
+It's opt-in because it writes a file to the instrument's disk.
+
+`nsweep --setup C:\UPL\MYSETUP.SAC` loads a stored setup first (`MMEM:LOAD:STAT 0`) — again how
+R&S's own programs configure a measurement, rather than sending every panel setting.
+
 ### Getting a stored file off the UPL
 
 `storetrace` is the "save on the instrument" half — it writes the trace (and optionally the X-axis
