@@ -67,6 +67,20 @@ The CPU board is the **least R&S‑proprietary part** and is replaceable from th
   maps that to `BOARD` (486→`UM486`, 586→`UM586`, else `SX386`). No dongle, no board‑ID handshake.
 - **Original boards:** an **AI5VG+** (half‑size Socket‑7 PICMG SBC, onboard VGA) *or* a **Kontron
   Geode GX1** module on a carrier. Both 586‑class → firmware sees `UM586`.
+- **Board history, from Service Manual Vol.2 (2026‑09‑23, shared Drive archive).** The parts list
+  of the UPL mainframe (1078.2008) shows the *earlier* generations:
+  **MOD 02 (monochrome LCD) — 386DX40 mainboard, Shuttle 327**; **MOD 05 (colour LCD) — 486 AT
+  board, ABIT AH4T**. Models 06/66 are the Pentium (586) units (Vol.1's 16‑bit-WAV note). This
+  finally explains all three branches of `AUTOEXEC.UPL`'s CPU mapping — `SX386` is for the MOD 02
+  386 boards, `UM486` for MOD 05, `UM586` for 06/66 — which the firmware analysis alone couldn't.
+  Same list: **Hitachi DK222A‑54, 2.5″ 540 MB IDE hard disk**, **Sony MPF520 3.5″ floppy**.
+  **Which generation *this* unit is has not been checked** — it matters for the replacement target
+  and for 16‑bit WAV support. Look at the boot screen / BIOS banner or the model plate.
+- **R&S's own statement on repairability** (Service Manual Vol.2 contents page): *"All modules not
+  listed above are no R&S developments but parts from subsuppliers… repair down to component level
+  is not possible. In the case of complaint, the complete module has to be replaced."* The CPU
+  board, hard disk, floppy and LCD are all in that category. This supports the plan below: treat
+  the CPU board as a swappable commodity part, and treat the *disk contents* as the thing to protect.
 - **The slot (schematic X6)** is a **standard full 16‑bit ISA (AT) slot**, fully populated, and the
   **CPU card is powered entirely from the slot** (+5V B3/B29/D16, +12V B9, −5V B5). No PICMG PCI
   section, no aux power connector.
@@ -109,8 +123,15 @@ Software (user has ALL software options):
   read "decode/analyze AC‑3 / MPEG / DTS bitstreams" — wrong on both counts. Vol.2 names it
   "UPL‑B23 (Coded Audio Signal Generation)" and puts every command under **`SOURce:CODedaudio`**
   (§3.10.1.5.14); `README.B23` agrees. It **generates** IEC 61937 bitstreams from a library of
-  pre-coded WAV files — it does not decode or analyze them. Format is **AC‑3 only** ("other formats
-  are in preparation"); no MPEG, no DTS. Practical consequence: B23 is for testing a *decoder*
+  pre-coded WAV files — it does not decode or analyze them. **Formats: AC‑3 and DTS; no MPEG.**
+  (A same-day follow-up correction: this line briefly said "AC‑3 only, no DTS", following the
+  operating manual's "other formats are in preparation". The later R&S B23/UPZ datasheet, v02.00
+  January 2004, from the shared Drive archive, says DTS *is* supported — 192 kbit/s stereo,
+  754 kbit/s 5.1 and single-channel — plus special signals: AC‑3 dialog-normalization files and
+  AC‑3/DTS full-scale files. The manual text simply predates it. **But the B23 library we actually
+  have contains AC‑3 files only** (`CODED/AC3/48000/…`), so in practice this unit can generate DTS
+  only if a DTS library is obtained, and even then whether 3.06 reads it is unverified.)
+  Practical consequence: B23 is for testing a *decoder*
   (an AV receiver), not for testing the M51 or the DCX2496, neither of which decodes AC‑3. See the
   UPA-CD / B23 section below for the full command set and the data-library path question.
 
@@ -864,7 +885,7 @@ next live session and keep whichever is literal.)
 | THD+N −60dB linearity (2-tone) | −60.14/−60.17 dB | ±0.5 dB | good |
 | Inherent THD+N @1kHz/2V, A100 | −97.7 to −97.9 dB | ≤−84 dB | ~14 dB |
 | Inherent D2 (DFD) @10kHz/200Hz/2V | −120.5 to −131.3 dB | ≤−110 dB | wide |
-| Inherent noise, A22 | 1.5–1.6 µV | ≤2 µV | tight-ish but PASS |
+| Inherent noise, A22 | 1.5–1.6 µV | ≤2 µV | tight-ish but PASS — normal for the model; a second unit reads 1.4/1.6 µV (see "Shared Drive archive") |
 | Inherent noise, A100 | 4.3–5.2 µV | ≤8 µV | comfortable |
 | Digital audio (B29) level/freq | −0.002% / exact | 0.1% / 0.01% | excellent |
 
@@ -982,6 +1003,68 @@ commands now confirmed in shipped firmware. `--setup` was added to `nsweep` for 
 - `SOUR:FUNC SIN`, `MMEM:DEL '<file>'`.
 - `INIT:CONT OFF;*WAI` as the single-sweep trigger — a third independent confirmation, now also
   from R&S's own shipped firmware rather than an app note.
+
+## Shared Drive archive (reviewed 2026‑09‑23)
+
+Google Drive folder `1gu6kGuI8oiFmsxlREX8HwBPrEix0Lwos`, **owned by another UPL owner**
+(bartvandekeere@gmail.com), shared with the user. Read through the Drive connector. Most of what
+this project already uses came from here (app notes, operating manual, 3.06 firmware, B23 library,
+UPA-CD). New material, by value:
+
+| Item | Drive location | Why it matters |
+|---|---|---|
+| **Service Manual Vol.2** (28 MB) | Documents/Service Manual/UPL/Bart's Version | Circuit diagrams, component plans and parts lists for the Digital Board, Analog Unit, Power Supply, B1, B2, B5, plus B4/B10/B21/B22 install instructions. Answers the CPU-board history — see the CPU-longevity section. |
+| **UPL‑B23 + UPZ datasheet** (v02.00, Jan 2004) | Documents/Option Manual | DTS support, special signals, UPZ switcher. Corrected the B23 entry above. |
+| **Second unit's selftest report** | Documents/Selftest Program/SELFTEST.TXT | A reference baseline from another UPL — see below. |
+| **Service Manual UPL‑B1** | same folder as Vol.2 | Install sheet + B1 calibration procedure (below), then schematics/parts. |
+| `B10 - BASIC/Example.txt` | Software | Third-party (BVKSound 2020) B10 loop: set level → `INIT:CONT OFF;*WAI` → `MMEM:STOR:TRAC TR1A,'A:OutputN.TRC'`. A sixth confirmation of the store path, writing straight to the floppy/Gotek drive. |
+| Photos: *CompactFlash Card*, *USB Floppy Emulator*, *PC Motherboard*, *ISA Interconnect Board* (incl. a `PCB Design.png`), *Digital Board*, *LCD Backlight* | Pictures | Someone's restoration log — an HDD→CF swap and a custom ISA interconnect PCB are directly relevant to the longevity plan. **Mostly HEIC; the connector returns no content for them.** Worth opening in a browser. |
+
+Folders that came back **empty through the connector**: `Software/EEPROM/UPL_EEPROM/849260-020`,
+`Documents/Calibration Documents`, `Software/DISK IMAGES`, `UPZ Switcher`, `Temporary`. Either empty
+or holding file types the connector doesn't list — check in a browser before concluding either.
+The EEPROM folder is worth that check: the digital board carries a **Xicor X24164 serial EEPROM**
+(Service Manual Vol.2 parts list), a plausible home for per-board calibration.
+
+**Deliberately not examined:** a top-level `Keygen` folder. This unit already has every option it
+needs fitted (`*OPT?`), so there's no reason to go near an option-unlock tool.
+
+### Second-unit selftest baseline (serial 828288/2, 2025‑01‑05)
+
+Same R&S selftest, different UPL — the first outside reference we've had for our 121/121 result.
+That unit has a different option mix (`B1, B2, B21, B22, B4, B5, B6, B8, B10, B33, B23, B9` — B2
+where ours has B29, plus B8/B9/B33).
+
+| Test | Ours (100330/6) | Theirs (828288/2) | Limit |
+|---|---|---|---|
+| Inherent THD+N @1 kHz/2 V, A22 | −103.0 to −103.6 dB | −104.25 / −104.34 dB | ≤ −93 |
+| Inherent THD+N @1 kHz, A100 | −97.7 to −97.9 dB | −97.21 / −97.54 dB | ≤ −84 |
+| THD+N at −60 dB | −60.14 / −60.17 | −60.09 / −60.09 | ±0.5 dB |
+| Inherent D2 | −120.5 to −131.3 dB | −130.41 / −134.13 dB | ≤ −110 |
+| **Inherent noise, A22** | **1.5–1.6 µV** | **1.4 / 1.6 µV** | ≤ 2 µV |
+| Inherent noise, A100 | 4.3–5.2 µV | 6.1 / 4.8 µV | ≤ 8 µV |
+| Generator accuracy | −0.12 to −0.35 % | +0.02 to +0.17 % | ±1.6–2 % |
+| Analyzer ranges @1 kHz | −0.06 to −0.42 % | −0.11 to +0.24 % | ±1.5 % |
+
+The useful conclusion: **our A22 inherent noise, previously noted as "tight-ish", is normal for the
+model** — a second unit lands in the same place. It isn't evidence of ageing. The two units are
+otherwise equivalent within ~1 dB. Ours reads consistently slightly *low* on generator and analyzer
+level while theirs reads slightly high; at 5–10 % of the tolerance that's not meaningful, but it's a
+number to watch across future selftests.
+
+### UPL‑B1 calibration procedure (from the B1 service manual install sheet)
+
+OPTIONS panel → **CALIBRATION GEN LOW DIST → ONCE**; runs automatically, no external instruments
+(level measured against the universal generator, frequency by the UPL's counter). Conditions:
+**no cables on the generator outputs or analyzer inputs**, ambient **23 ± 5 °C**, warm-up **1 hour**.
+Earlier notes in this file say "2 h warm-up" for the same calibration with no recorded source — 2 h
+is the safe choice until one or the other is confirmed.
+
+### UPZ Audio Switcher
+
+Also in the B23 datasheet: R&S's **UPZ** switcher (8 channels, cascade to 128 in and 128 out),
+controlled **from the UPL panel over RS‑232‑C** or directly by any controller. Only relevant if a
+multichannel DUT (an AV receiver for B23 testing) turns up, but it's the intended companion to B23.
 
 ## UPA-CD Audio Test Disc + UPL‑B23 coded audio (added by user 2026‑09‑23)
 
@@ -1107,7 +1190,9 @@ frequency variation and level variation are **mutually exclusive**, chosen by Va
 unavailable: `INST D48` (digital generator), `SENS:DIG:FEED ADAT`, `OUTP:SAMP:MODE F48`.
 ```
 SOUR:FUNC CODedaud
-SOUR:COD:FORM AC3                       ; only format implemented ("others in preparation")
+SOUR:COD:FORM AC3                       ; manual lists only AC3; the 2004 datasheet adds DTS, but
+                                        ; our library has AC-3 files only, and the DTS parameter
+                                        ; name is undocumented here -- don't guess it
 SOUR:COD:CHAN CH2 | CH6                 ; 2/0 @192 kb/s | 5.1 @448 kb/s -- freq AND level variable
 SOUR:COD:CHAN CHL|CHC|CHR|CHLS|CHRS|CHLF ; single channel @448 kb/s: 3 freqs only, fixed -20 dB
 ; frequency variation:
@@ -1130,7 +1215,10 @@ installed.
 
 Vol.1 §2.5.4.10 — `SOUR:FUNC ARB` + `MMEM:LOAD:LIST ARBitrary,'<file>'` accepts five formats:
 TTF and AWD (ASCII/designer output, max 16384 samples), **WAV (8- or 16-bit, _any length_;
-16‑bit needs model 06/66, i.e. a Pentium CPU — ours is, per the CPU analysis above)**, CPR
+16‑bit needs model 06/66, i.e. a Pentium CPU — whether ours is has NOT been verified**; this
+line previously said "ours is, per the CPU analysis above", but that analysis describes the boards
+the 3.06 firmware supports, not this unit. The service manual shows early models ran 386 and 486
+boards — see "Shared Drive archive" below. Check the boot screen or the model plate), CPR
 (compressed, for 486-era units), and **ACC — "a special compressed waveform format for WAV files
 containing AC3 or MPEG data coded in line with IEC 61937", digital generator only.**
 
