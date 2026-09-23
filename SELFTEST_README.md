@@ -6,21 +6,69 @@ a PASS/FAIL indicator per line on the front panel). This script runs the identic
 sequence from a PC over the remote-control link and prints **every underlying measured value**,
 plus writes a full text report you can keep and diff against future runs.
 
-Reference run: 2026-09-22, serial 100330/6, firmware 3.06 — **121/121 readings passed**. See
-`CLAUDE.md` for the full result table if you want something to compare a new run against.
+This guide is self-contained — you shouldn't need anything else from this repo except the two
+files named below. Reference run: 2026-09-22, serial 100330/6, firmware 3.06 — **121/121
+readings passed**. (`CLAUDE.md`, if you have it, has the full result table to compare a new run
+against, but it isn't required to use this script.)
 
-## What it needs
+## 1. Install the dependencies
 
-- The UPL connected via USB-serial to this PC, with the UPL's OPTIONS panel set to **remote
-  control on COM2** (not IEC-bus), matching whatever baud you pass to `--baud` (the OPTIONS
-  panel's COM2 baud setting and this script's `--baud` must agree — see below).
-- **Nothing physically connected to the UPL's generator or analyzer inputs/outputs.** This test
-  is entirely internal loopback (`INP:TYPE GEN2` — the UPL measures its own generator). Remove
-  any cables from the front panel before running, same as the front-panel version's own warning.
-- `pyserial` installed (`python -m pip install pyserial`) and `upl_capture.py` in the same folder
-  (it supplies the `UPL` serial class this script is built on).
+You need **Python 3.8 or later**. Check what you have:
 
-## How to run it
+```bash
+python --version
+```
+
+If that fails or shows Python 2, try `python3 --version` instead, and use `python3` in place of
+`python` in every command below. If you don't have Python at all, install it from
+[python.org](https://www.python.org/downloads/) (on Windows, tick "Add python.exe to PATH"
+during install) or via your OS's package manager on Linux/macOS.
+
+Then install the one required package, **pyserial** (note: not the similarly-named `serial`
+package — that's a different, unrelated library):
+
+```bash
+python -m pip install pyserial
+```
+
+Nothing else is required — no numpy, no other dependencies for this particular script.
+
+## 2. Get the files
+
+You need exactly two files, in the **same folder**:
+
+- `upl_selftest.py` — the script itself
+- `upl_capture.py` — supplies the `UPL` serial-communication class `upl_selftest.py` is built on
+
+Both are in this repository. If you only have `upl_selftest.py`, go back and grab
+`upl_capture.py` too — the script will fail to start without it (`ImportError`).
+
+## 3. Hardware setup
+
+- **A USB-to-serial adapter** connecting this PC to the UPL's rear **COM2** port. An
+  FTDI-chipset adapter is recommended — some Prolific-chipset adapters have shown intermittent
+  driver issues in testing (see the Gotchas section below if a port that worked before suddenly
+  won't open).
+- **On the UPL itself**, via its OPTIONS panel: set remote control destination to **COM2** (not
+  IEC-bus), and note the baud rate shown there — you'll pass the same number to `--baud` below.
+  (115200 is a good default if you're free to choose; see the baud note further down.)
+- **Remove any cables from the UPL's generator and analyzer front-panel connectors** before
+  running. This test is entirely internal loopback — the UPL measures its own generator — and
+  the original front-panel self-test carries the same warning.
+
+## 4. Find your COM port
+
+The adapter will show up as a numbered COM port on Windows. Check Device Manager → Ports (COM &
+LPT), or run this from a terminal:
+
+```bash
+python -c "import serial.tools.list_ports as lp; print([(p.device, p.description) for p in lp.comports()])"
+```
+
+Look for your adapter's description in the list (e.g. "USB Serial Port (COM7)") and use that
+`COMx` value as `--port` below.
+
+## 5. How to run it
 
 ```bash
 python upl_selftest.py --port COM7
@@ -40,10 +88,9 @@ python upl_selftest.py --port COM7 -o results/selftest_2026-09-23.txt
 python upl_selftest.py --port COM7 --settle 0.8
 ```
 
-Default baud is **115200** (confirmed working directly on real hardware — see `CLAUDE.md`; the
-Vol.2 manual's own SCPI baud table was incomplete and only listed up to 56000). Set the UPL's
-OPTIONS panel COM2 baud to match, or override with `--baud` if you're running it at something
-else.
+Default baud is **115200** (confirmed working directly against real UPL hardware, even though
+the printed manual's own SCPI baud table only listed up to 56000). Set the UPL's OPTIONS panel
+COM2 baud to match, or override with `--baud` if you're running it at something else.
 
 ## What happens when you run it
 
@@ -93,6 +140,12 @@ script "run self-test, alert me only if something's wrong."
 
 ## Gotchas
 
+- **Port opens sometimes, fails other times with a "file not found"-style error.** This is a
+  known intermittent USB-serial driver quirk seen on both Prolific and FTDI adapters, not a
+  wiring problem. Fix, in order of what to try: (1) unplug and replug the adapter, (2) plug it
+  into a different USB port directly on the PC rather than a hub, (3) reboot the PC, (4) in
+  Device Manager, open the adapter's Properties → Power Management and untick "Allow the
+  computer to turn off this device to save power" (do the same for each USB Root Hub too).
 - **`*RST` wipes your setup.** If you have a working setup loaded, save it or note it down before
   running this, and reload it afterward.
 - **A "reading" of `9.93e37` (or similar absurdly large values) is the UPL's own "not available"
