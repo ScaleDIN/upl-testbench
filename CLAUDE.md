@@ -170,8 +170,12 @@ option tokens, which is now identified above — previously flagged as unknown.)
   (`0,"No error"`) but THD+N barely changed (−106.56→−106.65 dB). Hypothesis: defining a UFILter
   does not itself route it into the active measurement chain — per the manual's own example
   (`SENS:FILT2:UFIL5 ON`), the filter likely also needs to be **assigned to a filter slot** via
-  `SENS:FILT<i>:UFILter<n> ON` (i=slot 1‑3) to actually engage it. NOT YET CONFIRMED — try that
-  assignment step next time, and/or just read §3.10.3/§2.7 in Vol.2 directly (page ~3.163 in PDF).
+  `SENS:FILT<i>:UFILter<n> ON` (i=slot 1‑3) to actually engage it.
+  **CONFIRMED 2026‑09‑23 — hypothesis was right.** The shipped firmware demo `DISK2/DEMOEXAM.LZH →
+  DEMO.BAS` does exactly this: `SENS:FILT OFF` → `SENS:UFIL:PASS:LOW 3 KHZ` →
+  `SENS:UFIL:PASS:UPP 4 KHZ` → **`SENS:FILT:UFIL1 ON`**. Defining a user filter does not engage it;
+  the slot assignment is what routes it into the measurement chain. So the bandwidth-limited THD+N
+  measurement needs the assignment line our 2026‑09‑22 test was missing. Still to be run live.
   Manuals: `R&S_UPL_Audio_Analyzer_Op_Vol_1.pdf` / `_Vol_2.pdf` one level up from this folder.
   Vol 2 = remote/IEC‑bus command reference (confirmed).
   Extract text for searching with `pdftotext -layout <file> out.txt` (available in this env).
@@ -911,12 +915,16 @@ CALC  : -- none --
 FORM  : -- none --
 ```
 So it independently corroborates the **SWE1** half (and this is R&S's own shipped firmware, not an
-app note — a third independent confirmation), but it is **silent on the FEED half**, which remains
-the one piece of the fix with no corroborating usage anywhere. It also never reads a trace over the
-bus at all: it gets its result out with `MMEM:STOR:LIST EQU,'file'`. Its measurement and display
-configuration comes from `flat_gen.sac`, and that is an opaque binary setup blob — checked, it
-holds file references and encoded panel state, not readable SCPI — so it cannot tell us whether
-FEED is set there either.
+app note — a third independent confirmation), but it is **silent on the FEED half**. It also never
+reads a trace over the bus at all: it gets its result out with `MMEM:STOR:LIST EQU,'file'`. Its
+measurement and display configuration comes from `flat_gen.sac`, and that is an opaque binary setup
+blob — checked, it holds file references and encoded panel state, not readable SCPI — so it cannot
+tell us whether FEED is set there either.
+
+> **CORRECTION 2026‑09‑23 (same day):** this section originally went on to say FEED "remains the one
+> piece of the fix with no corroborating usage anywhere." **That was wrong** — FLAT_GEN.BAS lacks it,
+> but other programs have the complete pattern. See "FEED → sweep → readout confirmed end-to-end"
+> below.
 
 **Useful consequence:** it demonstrates R&S's own preferred way to configure a measurement —
 `MMEM:LOAD:STAT 0,'<name>.SAC'` rather than sending every panel setting — plus a result path that
@@ -945,6 +953,82 @@ commands now confirmed in shipped firmware. `--setup` was added to `nsweep` for 
 - `SOUR:FUNC SIN`, `MMEM:DEL '<file>'`.
 - `INIT:CONT OFF;*WAI` as the single-sweep trigger — a third independent confirmation, now also
   from R&S's own shipped firmware rather than an app note.
+
+## Full BASIC-source sweep, 2026‑09‑23 — every `.BAS` in every archive
+
+Inventory of all BASIC sources anywhere in this project (firmware `.LZH` + app-note self-extracting
+ZIPs + their nested `.LZH`s), so nobody re-derives this list:
+
+| Archive | Files | Status |
+|---|---|---|
+| `DISK2/IEC_EXAM.LZH` | `EXAM1‑7.BAS`, `RS232_BT.BAS` | digested 2026‑09‑22 |
+| `DISK2/B10_EXAM.LZH` | `EXAM1‑7.BAS` | **nothing new** — byte-for-byte the same SCPI as IEC_EXAM, minus the `syst:err?` calls. Only `UPL OUT` vs `IEC OUT` differs. |
+| `DISK2/DEMOEXAM.LZH` | `DEMO.BAS` (11.5 KB) | **new, productive** — see below |
+| `DISK2/USER.LZH` | `SNDFILE`, `DRV_INST`, `FLAT_GEN`, `IMPEDANC`, `SELFTEST` | all digested |
+| `DISK1/*.LZH` | — | no BASIC at all (drivers, refs, tools) |
+| App notes 1ga16/1GA21/1GA24/1GA30/1GA33 | `SOUND`, `IMPEDANC`, `PHASE`, `THD`, `SPK_LIB`, `UTILITY`, `APPLICAT`, `SPEAKER`, `CDTEST`, `TUNTEST`, `SETUP`, `Adctest`, `LIMIT` | digested 2026‑09‑23 |
+| `FM Tuner Test Program/TUNER.LZH` | `TUNER.BAS` (25.6 KB), `FASTDIST`, `MULTFREQ` | **new** — see below |
+| `1ga36_1l.exe → MAKEDISK.LZH` | — | no BASIC (setup files only) |
+
+### FEED → sweep → readout, confirmed end-to-end
+
+`appnotes/1ga16_1l/SOUND.ASC` lines 20565‑20640 is our exact `nsweep` sequence, in R&S's own code:
+```
+DISP:TRAC:OPER CURV
+DISP:TRAC:FEED 'SENS:DATA2'          <- the FEED
+DISP:TRAC:X:AUTO OFF / :LEFT / :RIGH
+DISP:CONF SP
+INIT:CONT OFF; *wai                  <- single-sweep trigger
+TRAC:POIN? TRAC1                     <- point count, used to DIM the arrays
+TRAC? LIST1                          <- X axis
+TRAC? TRAC1                          <- Y values
+```
+`DISP:TRAC:FEED` is used by **six** programs in total (`SOUND`, `PHASE`, `THD`, `CDTEST`, `TUNTEST`,
+`Adctest`, plus `DEMO.BAS` and `TUNER.BAS` in the HOLD sense). The FEED half of the native-sweep fix
+is therefore as well corroborated as the SWE1 half — it was only *FLAT_GEN.BAS* that was silent on it.
+
+Also useful for bring-up: **`DISP:TRAC2:FEED?` is queryable**, and SOUND.ASC compares its reply
+against the string `'SENS:DATA'` — i.e. the reply comes back *with the quotes included*. Worth
+knowing before parsing it in the bring-up diagnostic.
+
+### `DEMO.BAS` (shipped firmware) — resolves the UFILter routing question
+
+**`SENS:FILT:UFIL1 ON` confirmed in shipped firmware**, in exactly the sequence the earlier
+open question predicted:
+```
+SENS:FILT OFF                  ; clear the filter slots
+SENS:UFIL:PASS:LOW 3 KHZ       ; define the user filter's passband
+SENS:UFIL:PASS:UPP 4 KHZ
+SENS:FILT:UFIL1 ON             ; <- ROUTE it into the measurement chain
+```
+This closes the `SENSe:FILTer<i>` item recorded under "SCPI vocabulary confirmed present": defining
+a user filter does **not** engage it; assigning it to a filter slot does. That explains why the
+2026‑09‑22 live test saw THD+N barely move after `SENS1:UFILter1:LPASs ON` + `PASSb 22000`.
+
+Working **zoom-FFT** example, also from DEMO.BAS — note the order, ZOOM *then* CENT (`cmd_fft` was
+changed to match):
+```
+CALC:TRAN:FREQ:ZOOM 8
+CALC:TRAN:FREQ:CENT 5000 HZ
+CALC:TRAN:FREQ:AVER 2
+DISP:TRAC:X:LEFT 4.9 KHZ ; DISP:TRAC:X:RIGH 5.1 KHZ
+```
+Other finds: `DISP:ACT OFF` / `ON` (**deactivate display updates for measurement speed** — also used
+by CDTEST and TUNER.BAS; worth trying in our sweep loops), `SENS:FUNC 'WAV'`, `SENS:FUNC:MMOD
+STAN|DODD`, `MMEM:LOAD:LIST EQU,'file'` (the read side of FLAT_GEN's store), `MMEM:LOAD:PAC` for
+AES3 protocol config, and `MMEM:LOAD:STAT 4,'x.PCX'` to throw an image on the screen.
+
+### `TUNER.BAS` — trace-store and cursor readout
+
+- **`MMEM:STOR:FORM EXP`** — the short form works (we send `EXPort`); plus `MMEM:STOR:TRAC TRAC,'…'`
+  and `TR1A,'…'` again, now a fifth independent confirmation of the store path.
+- `DISP:ACT OFF;:DISP:TRAC:FEED 'HOLD';:DISP:TRAC2:FEED 'SENS:DATA'` — freeze trace A as a
+  reference while trace B keeps measuring live. Clean idiom for before/after comparisons.
+- **Cursor readout as a cheap alternative to pulling a whole trace:**
+  `DISP:TRAC:CURS:POS:MODE MAX1` (or `MIN1`, `IMAX1`, `VAL`) then `DISP:TRAC:CURS:DATA?` /
+  `:DATA2?` returns just that point. For peak-finding (the jitter scripts, resonance hunting) this
+  is far less wire traffic than `TRAC?` + argmax on the host. Also `DISP:TRAC:CURS:MODE N12`,
+  `DISP:TRAC:X:LEFT?/:RIGH?`, `DISP:TRAC:Y:TOP?/:BOTT?`, `DISP:TRAC:Y:RLEV:MODE REF1000`.
 
 ## Application Notes catalog (digested 2026‑09‑22)
 

@@ -568,9 +568,10 @@ def _fft(upl, args):
     upl.write(f"CALC:TRAN:FREQ:WINDow {args.window}")
     # Over the bus you set the ZOOM FACTOR, never the SPAN -- "contrary to the
     # manual mode ... SPAN can only be read in but not entered" (Vol.2 p.3.134).
+    # ZOOM before CENT, the order the shipped DEMO.BAS uses.
+    upl.write(f"CALC:TRAN:FREQ:ZOOM {args.zoom}")
     if args.center is not None:
         upl.write(f"CALC:TRAN:FREQ:CENT {args.center} HZ")
-    upl.write(f"CALC:TRAN:FREQ:ZOOM {args.zoom}")
 
     err = upl.query("SYST:ERR?")
     if not err.startswith("0,"):
