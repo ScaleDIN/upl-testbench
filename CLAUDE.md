@@ -953,6 +953,34 @@ Internal loopback (`*RST; INP:TYPE GEN2`), UPL on PC COM2 at 115200.
   6. For numbers, prefer `nsweep`'s direct readout; storetrace + SNDFILE is for when the file itself
   is wanted, or for traces too long to be worth the SCPI round trips. `ZFR40*.EXP` are test
   files, safe to delete.
+- **Every SNDFILE run takes COM2 away from SCPI remote.** Afterwards the UPL answers nothing on
+  COM2, even `*IDN?`, with CTS still asserted and a bare LF flush doing nothing — the macro opens
+  COM2 through `COMX.SYS` and the remote handler doesn't get the port back. **Recovery: OPTIONS →
+  Remote via → IEC → COM2.** Needed after *every* transfer.
+- **`MMEM:STOR:INFO '<path>'` sets SNDFILE's Info Text remotely** (reads back exactly), so no typing
+  on the panel. After a run, `MMEM:STOR:INFO?` returns `' <n> bytes sent <path>'` (truncated to
+  ~40 chars) or `'file not found'`. SNDFILE.BAS itself: read Info Text → open file → if that fails
+  write `'file not found'`, else send in 1024-byte chunks and write the byte count.
+- **Double-run trap:** when the macro finishes, the cursor is still on OPTIONS → Exec Macro, and
+  any ENTER/SELECT there starts SNDFILE again — which reads its own "n bytes sent" sentence as a
+  file name, writes `'file not found'`, and grabs COM2 again. It caught us twice. **Cursor-up to
+  "Remote via" before pressing anything.** With that, 8/8 runs were clean.
+- **`scratchpad/sndfile_batch.py` automates the PC side** of a multi-file pull: waits for the link,
+  checks the previous file (UPL byte count, plus the `.CAL` header point count vs. data rows),
+  sets the next Info Text, listens. Operator per file: LOCAL → Exec Macro → ENTER → cursor up →
+  Remote IEC → COM2 → wait ~5 s. Appends to `<outdir>/manifest.csv`.
+- **`C:\UPL\REF` BACKED UP, 2026‑09‑23, over RS‑232** → `results/REF/` (git-ignored), every file
+  verified by the UPL's byte count and/or the header row count:
+  | File | Bytes | Content |
+  |---|---|---|
+  | `FLAT_GEN.CAL` | 30778 | generator flatness, 1024 pts 2 Hz–21.6 kHz, 0.99901–1.00026 (<±0.01 dB) |
+  | `FLAT1AC/1DC/2AC/2DC.CAL`, `FLAT_AC/DC.CAL` | ~10150 each | analyzer flatness, 430 pts each, 1 Hz–22.08 kHz |
+  | `EANSTR.XMM` | 41954 | German UI string table ("String für UPD und UPL") — not calibration |
+  | `GLEI_RAU.BPZ` | 141 | **binary** — and still byte-exact, so SNDFILE handles binary |
+  | `GL_EPI.LOG` | 2 | — |
+  `.CAL` format: 7 header lines (`213 2 10 1 <npts> 1 0`), `#----X----Y----`, then X/Y rows.
+  The REF listing continued past `GL_EPI.LOG` off-screen — **remaining REF files not yet pulled**;
+  `C:\UPL\SETUP\CAL_*.SET` (the other calibration store) also still to do.
 - **The front-panel file box is the working substitute for `MMEM:CAT?`.** Any filename field →
   SELECT opens a browser (`*.*` from FILE→Copy SOURCE; `*.BAS` from OPTIONS→Exec Macro).
   `C:\UPL\USER` holds `DRV_INST SNDFILE FLAT_GEN IMPEDANC INIT SELFTEST USERMAC .BAS`.
