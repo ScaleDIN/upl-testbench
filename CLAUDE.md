@@ -105,7 +105,14 @@ Software (user has ALL software options):
   extends B2/B29; confirmed via brochure, see below). Pairs with 1GA36's `PROT*_DD.SAC` setups.
 - **UPL‑B22** — **Jitter and Interface Test** (runs on B29 digital hw; jitter‑sideband DAC demo
   IS available; confirmed via brochure).
-- **UPL‑B23** — Coded Audio: decode/analyze AC‑3 / MPEG / DTS bitstreams (IEC 61937) over SPDIF.
+- **UPL‑B23** — Coded Audio Signal **Generation**. **CORRECTED 2026‑09‑23:** this entry previously
+  read "decode/analyze AC‑3 / MPEG / DTS bitstreams" — wrong on both counts. Vol.2 names it
+  "UPL‑B23 (Coded Audio Signal Generation)" and puts every command under **`SOURce:CODedaudio`**
+  (§3.10.1.5.14); `README.B23` agrees. It **generates** IEC 61937 bitstreams from a library of
+  pre-coded WAV files — it does not decode or analyze them. Format is **AC‑3 only** ("other formats
+  are in preparation"); no MPEG, no DTS. Practical consequence: B23 is for testing a *decoder*
+  (an AV receiver), not for testing the M51 or the DCX2496, neither of which decodes AC‑3. See the
+  UPA-CD / B23 section below for the full command set and the data-library path question.
 
 No option caveats — full capability across analog, digital (≤96 kHz), jitter, protocol, and
 coded‑audio domains. (`*OPT?` on the instrument, 2026-09-22, also showed a bare "B21" among the
@@ -131,7 +138,11 @@ option tokens, which is now identified above — previously flagged as unknown.)
 - Retire the Gotek: pull data over a **USB‑serial cable to the UPL rear COM2**, or a USB‑GPIB adapter.
 
 ### RS232 remote protocol (verified from `DISK2/IEC_EXAM/RS232_BT.BAS`)
-- UPL **COM2**: **8 data, no parity, 1 stop, RTS/CTS handshake**, baud 2400–19200 (use 19200).
+- UPL **COM2**: **8 data, no parity, 1 stop, RTS/CTS handshake**.
+  **Baud: use 115200** — confirmed live, and the default in every tool here. (This line used to say
+  "2400–19200 (use 19200)", which was the range in `RS232_BT.BAS`; Vol.2 §3.17.1 prints
+  2400–56000. Both are wrong/incomplete: **115200 is listed in the UPL's own OPTIONS panel and
+  works** — see "Remote baud rate — CORRECTED" below. 19200 and 56000 also work, just slower.)
 - Set OPTIONS panel: remote → **COM2**, and the COM2 params above.
 - Cable: R&S **1050.0346**, or a 9‑pin **null‑modem cable with full RTS/CTS**; USB‑serial adapter
   must expose real RTS/CTS.
@@ -275,14 +286,17 @@ Subcommands:
 - `autoexport [-o] [--setup] [--both] [--repeat N --interval S] [--opc]` — **trigger a fresh sweep
   and pull trace(s)+x‑axis to a timestamped CSV; no file created on the UPL.** (Primary tool.)
 - `catalog [path]` — `MMEM:CAT?` list UPL files.
-- `getfile "C:\UPL\X.EXP" -o local` — pull an existing UPL file (488.2 block).
+- `getfile "C:\UPL\X.EXP" -o local` — pull an existing UPL file (488.2 block). **Unverified and
+  probably wrong** — 1GA42_0E says UPL→PC bulk transfer isn't supported over the bus; use the
+  SNDFILE/`ser_in.py` route instead. See the CORRECTION note above before relying on it.
 - `raw "SCPI"` — send one command (query if it ends `?`).
 
 Example: `python upl_capture.py --port COM7 probe` then `… --port COM7 autoexport --opc`.
 
 **LINK VERIFIED 2026‑09‑22:** `probe` returned `ROHDE & SCHWARZ, UPL, 3.06, 0.33` — remote/B4
-confirmed. Verified on both **COM7** (FTDI) and **COM2** (Prolific PL2303) at 19200 8/N/1 RTS/CTS;
-Prolific gave 5/5 stable `*IDN?` across processes AFTER a reboot. NOTE: pre‑reboot the Prolific
+confirmed. Verified on both **COM7** (FTDI) and **COM2** (Prolific PL2303), 8/N/1 RTS/CTS — at
+19200 *at the time*; the link has since been moved to **115200**, which is the current default
+everywhere. Prolific gave 5/5 stable `*IDN?` across processes AFTER a reboot. NOTE: pre‑reboot the Prolific
 (2008 driver) + hub ports caused intermittent "port de‑enumerates / R/W open fails (WinError 2)"
 flakiness. If it recurs: reboot + direct laptop USB port + selective‑suspend off on the converter
 and USB root hubs. FTDI/CP210x on a direct port is the more reliable choice.
@@ -317,7 +331,10 @@ inherent THD+N/DFD/noise floors, and digital audio — a goldmine of confirmed w
   any `INST`/`INST2` change** — it does not preserve the prior function/routing.
   **Conclusion: no further "bandwidth fix" is needed for THD+N in A22 mode — −106 dB is the real,
   healthy number**, not a fixable measurement artifact. The `SENS:UFILter` avenue from earlier
-  remains uninvestigated/parked, but is no longer necessary to explain the THD+N result.
+  remains untested *live*, but is no longer necessary to explain the THD+N result — and the missing
+  piece was found documentarily on 2026‑09‑23: a user filter must be **assigned to a filter slot**
+  (`SENS:FILT:UFIL1 ON`) to engage, which is why the earlier attempt did nothing. See the UFILter
+  note in "SCPI vocabulary confirmed present".
 - `DIAG:DEV SERN; DIAG:DEV:ADDR 0|1; DIAG:DEV:DATA?` — reads the unit's serial number (two halves,
   concatenated with `/`).
 - `INP:SEL CH2I | BOTH` — select input source per channel. `INP:TYPE BAL|GEN2|INT` — balanced
@@ -355,7 +372,8 @@ inherent THD+N/DFD/noise floors, and digital audio — a goldmine of confirmed w
 *own* rear-panel serial port is always called "COM2" (that's fixed, from its OPTIONS-panel remote
 config). But which *PC* COM port that connects to depends on which USB-serial adapter is plugged
 into it, and that has changed across this session:
-- **UPL → this PC's COM7** (FTDI adapter). Baud **56000**, persisted through a UPL restart.
+- **UPL → this PC's COM7** (FTDI adapter). Baud **115200** (was 56000 earlier in the session;
+  115200 was set on the OPTIONS panel and confirmed live, and persists through a UPL restart).
 - **DCX2496 → this PC's COM2** (Prolific adapter).
 - History: originally UPL was on the PC's COM2 (Prolific) and flaky; swapped so the more reliable
   FTDI serves the UPL (needs clean bidirectional SCPI) and the flakier Prolific serves the DCX2496
@@ -418,8 +436,9 @@ python dcx2496.py --port COM<n> enable
 python dcx2496.py --port COM<n> gain out1 -6.0     # then LOOK at the DCX2496 front panel (OUTPUT 1)
 ```
 Gain/mute/polarity/phase now considered live-trustworthy (real hardware confirmation, twice).
-EQ-band param-numbering (step-of-5 guess, see above) still NOT verified against hardware — test
-that specifically before relying on `set_eq_band` for anything beyond band 1.
+EQ-band param-numbering (step-of-5) **was** unverified at this point — **superseded: it was
+confirmed live later the same day**, along with a gotcha (param `0x07` gates how many bands are
+active; band 2+ are silently ignored unless it's raised). See "EQ-band unknown RESOLVED" below.
 
 ### FIRST REAL AUTOMATED CROSSOVER MEASUREMENT — success, 2026‑09‑23
 
@@ -624,9 +643,11 @@ Do these in order; each step isolates one unverified assumption.
    analyzer, confirmed working 2026‑09‑22). A sweep here has a known-good answer: flat.
 4. `python upl_capture.py --port COMn nsweep --points 10 --volt 1.0 -o /tmp/fr.csv`
    — small point count first, so a stall costs seconds not minutes. Expect ~flat ≈1.0 V.
-   - If `TRAC:POIN? TRAC1` → `0`: the FEED hypothesis is wrong or incomplete. Probe
-     `DISP:TRAC:FEED?` and `DISP:TRAC:OPER?` to see what actually stuck, and check `SYST:ERR?`
-     immediately after each config command to find which one was rejected.
+   - If `TRAC:POIN? TRAC1` → `0`: FEED is *not* the suspect it was when this checklist was written —
+     `SOUND.ASC` has the whole FEED→sweep→`TRAC?` chain, so the approach is sound and the fault is
+     more likely a rejected command or a missing precondition. Probe `DISP:TRAC:FEED?` (reply comes
+     back *with* quotes, e.g. `'SENS:DATA'`) and `DISP:TRAC:OPER?` to see what actually stuck, and
+     check `SYST:ERR?` immediately after each config command to find which one was rejected.
    - If the sweep times out: raise `--sweep-timeout`; 40 points took ~17 s, so a slow function
      (THDN with long averaging) could take minutes.
 5. Only then scale up: `--points 40`, a real DUT, `--both`.
@@ -789,8 +810,8 @@ ephemeral scratchpad and were superseded/discarded).
 
 ### Running it
 ```
-python upl_selftest.py --port COM2                     # default baud 56000, auto-named report file
-python upl_selftest.py --port COM2 --baud 19200 -o results/run1.txt
+python upl_selftest.py --port COM7                     # default baud 115200, auto-named report file
+python upl_selftest.py --port COM7 --baud 19200 -o results/run1.txt   # slower, if 115200 misbehaves
 ```
 - Prints every section live to the console AND writes the identical full report to a text file
   (default `upl_selftest_<timestamp>.txt` in the current folder, or pass `-o <path>`).
@@ -828,8 +849,11 @@ firmware's own help text).
 **Result: 121/121 readings within R&S factory tolerance** (full resolution — all 3 frequencies ×
 16 analyzer-range points = 48, plus generator range, low-dist gen accuracy, THD+N/DFD/noise
 inherent-performance checks, and digital audio). Unit: **serial number 100330/6**, firmware 3.06,
-`*OPT?` = `B1(0.01),B29(2.16),B21,B22,B4,B5(1.62),B6,B10,B22,B23` (note: **B21** also appears in
-`*OPT?` and wasn't previously cataloged — not yet identified, check the manual/front panel).
+`*OPT?` = `B1(0.01),B29(2.16),B21,B22,B4,B5(1.62),B6,B10,B22,B23`. (**B21 is identified** —
+UPL‑B21 = Digital Audio Protocol; see the note further down. This line previously said "not yet
+identified". Note also that this transcription and the one in the SCPI-vocabulary section
+differ — that one reads `…B6,0,B10,0,B23,0`, i.e. with empty slots. Re-read `*OPT?` once at the
+next live session and keep whichever is literal.)
 
 | Test | Result | Spec | Margin |
 |---|---|---|---|
