@@ -22,9 +22,9 @@ UPL: OPTIONS -> Remote via -> IEC.
 Writes <outdir>/<basename> for each file plus <outdir>/manifest.csv.
 
 Usage:
-  python scratchpad/sndfile_batch.py --port COM2 --outdir results/REF \
+  python tools/sndfile_batch.py --port COM2 --outdir results/REF \
       C:\\UPL\\REF\\FLAT1AC.CAL C:\\UPL\\REF\\FLAT1DC.CAL
-  python scratchpad/sndfile_batch.py --port GPIB0::20::INSTR --data-port COM2 \
+  python tools/sndfile_batch.py --port GPIB0::20::INSTR --data-port COM2 \
       --outdir results/SETUP C:\\UPL\\SETUP\\CAL_GEN.SET ...
 
 Serial mode verified live 2026-09-23 (10 REF files). GPIB mode not yet run.

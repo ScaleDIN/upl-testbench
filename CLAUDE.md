@@ -11,11 +11,14 @@ things are built the way they are. The READMEs are the quick-start; this is the 
 
 **Correction, 2026‑09‑23:** several scripts described below as "ephemeral"/"not in this repo"
 (in the AppData temp scratchpad) have since been cleaned up and promoted into this project's own
-permanent `scratchpad/` folder (with `argparse` CLIs replacing their original hardcoded
+permanent folder (with `argparse` CLIs replacing their original hardcoded
 COM2/COM7/temp-path values) — `dcx_thdn.py`, `dcx_thd_vs_thdn.py`, `dcx_gauntlet.py`,
-`dcx_balanced_test.py`. They're real, runnable, documented in `README.md` now. Also discovered/
+`dcx_balanced_test.py`. They're real, runnable, documented in `README.md` now. That folder was
+first called `scratchpad/`; on 2026‑09‑24 it was split into **`measurements/`** (DUT
+characterization scripts) and **`tools/`** (`upl_backup.py`, `sndfile_batch.py`,
+`lzh_extract.py`), because the old name made them look temporary. Also discovered/
 catalogued in this pass: a substantial **NAD M51 DAC** control module + test suite
-(`nad_m51.py` + `scratchpad/m51_*.py`) that was built earlier in the project but not previously
+(`nad_m51.py` + `measurements/m51_*.py`) that was built earlier in the project but not previously
 described in this log in detail — see `README.md` for what each one does and how to run it.
 
 ## Goal / context
@@ -420,7 +423,7 @@ option tokens, which is now identified above — previously flagged as unknown.)
   `SENS:UFIL:PASS:UPP 4 KHZ` → **`SENS:FILT:UFIL1 ON`**. Defining a user filter does not engage it;
   the slot assignment is what routes it into the measurement chain. So the bandwidth-limited THD+N
   measurement needs the assignment line our 2026‑09‑22 test was missing.
-  **VERIFIED LIVE 2026‑09‑24** (`scratchpad/filter_test.py`, B1 1 kHz 1 V loopback, THD+N):
+  **VERIFIED LIVE 2026‑09‑24** (`measurements/filter_test.py`, B1 1 kHz 1 V loopback, THD+N):
   none −106.6 · 20 kHz LP −106.7 · 10 kHz −108.5 · 5 kHz −110.5 · 3 kHz −112.4 dB — about 1.9 dB
   per halving of bandwidth (white noise would give 3), so the loopback residual is LF-heavy.
   Working order: `SENS:FILT OFF` → `SENS:UFIL1:LPAS ON` → `SENS:UFIL1:PASS <Hz>` →
@@ -510,9 +513,9 @@ also our SCPI control channel may hit port contention (the UPL's RS232 SCPI hand
 (front‑panel Info Text + OPTIONS→SNDFILE, PC listener via `ser_in.py`) sidesteps this entirely
 and is the safer one to try first.
 
-**Confirmed 2026‑09‑23 by decompressing `DISK2/USER.LZH`** with `scratchpad/lzh_extract.py` (a
+**Confirmed 2026‑09‑23 by decompressing `DISK2/USER.LZH`** with `tools/lzh_extract.py` (a
 pure-Python `-lh5-` decoder written because `LHA.EXE` is 16-bit DOS and there's no `lha`/`7z` here;
-`python scratchpad/lzh_extract.py DISK2/USER.LZH` lists, `... USER.LZH SNDFILE.BAS` extracts).
+`python tools/lzh_extract.py DISK2/USER.LZH` lists, `... USER.LZH SNDFILE.BAS` extracts).
 `SNDFILE.BAS` contains the literal line:
 ```
 OPEN "com2:115000,n,8,1,10000,10,v,m" ...
@@ -539,7 +542,7 @@ Subcommands:
 - `catalog [path]` — `MMEM:CAT?` list UPL files.
 - `getfile "C:\UPL\X.EXP" -o local` — pull an existing UPL file (488.2 block) and print the UPL's
   MD5 of it. **VERIFIED 2026‑09‑24 over both RS‑232 and GPIB** — 1GA42's "not supported" is wrong
-  for 3.06. For many files, with MD5 checking and retries, use `scratchpad/upl_backup.py`. See
+  for 3.06. For many files, with MD5 checking and retries, use `tools/upl_backup.py`. See
   "GPIB (Agilent/Keysight 82357B)" for both.
 - `raw "SCPI"` — send one command (query if it ends `?`).
 
@@ -834,7 +837,7 @@ from the documentation, **neither yet run against the instrument.** Supporting o
 
 ### FFT "zoom quirk" RESOLVED 2026‑09‑23 — it was the 1024-line block limit all along
 
-`scratchpad/m51_jitter_fft.py` carried a hard-won note that only `CALC:TRAN:FREQ:ZOOM 1` gave a
+`measurements/m51_jitter_fft.py` carried a hard-won note that only `CALC:TRAN:FREQ:ZOOM 1` gave a
 trustworthy readout; that `ZOOM>1 + CENTer` left the peak "stuck at silence-floor level, no
 consistent axis"; that `CALC:TRAN:FREQ:STARt?/STOP?` reported "a wider theoretical span than what
 TRAC1 actually returns"; and that the usable range was "0 – ~6000 Hz". **All three symptoms are one
@@ -984,7 +987,7 @@ Internal loopback (`*RST; INP:TYPE GEN2`), UPL on PC COM2 at 115200.
   any ENTER/SELECT there starts SNDFILE again — which reads its own "n bytes sent" sentence as a
   file name, writes `'file not found'`, and grabs COM2 again. It caught us twice. **Cursor-up to
   "Remote via" before pressing anything.** With that, 8/8 runs were clean.
-- **`scratchpad/sndfile_batch.py` automates the PC side** of a multi-file pull: waits for the link,
+- **`tools/sndfile_batch.py` automates the PC side** of a multi-file pull: waits for the link,
   checks the previous file (UPL byte count, plus the `.CAL` header point count vs. data rows),
   sets the next Info Text, listens. Operator per file: LOCAL → Exec Macro → ENTER → cursor up →
   Remote IEC → COM2 → wait ~5 s. Appends to `<outdir>/manifest.csv`.
@@ -1043,7 +1046,7 @@ with no macro, no panel steps and no COM2. **SNDFILE is retired.**
 
 **It works over RS‑232 too (2026‑09‑24)** — the `#<n><len>` header frames the data, so no EOI is
 needed. `upl_capture.py getfile` fetched `GL_EPI.LOG`, `GLEI_RAU.BPZ` (binary), `FLAT_GEN.CAL`
-byte-identical; `scratchpad/upl_backup.py --port COM2` then pulled all 7 calibration files,
+byte-identical; `tools/upl_backup.py --port COM2` then pulled all 7 calibration files,
 first attempt, byte-identical to the GPIB copies. **~10 kB/s** (the 115 200‑baud ceiling): the
 calibration set in ~10 s, the whole 40 MB disk in ~70 min. **Serial-only owners need neither
 SNDFILE nor a GPIB adapter.**
@@ -1112,7 +1115,7 @@ don't exist — by name, error logs from a failed calibration.
 previous owner; R&S originals (`AUTOEXEC.UPL`, `CONFIG.UPL`, `CONFIG.IEC`…) keep 2000–01 dates.
 Biggest dirs: `C:\CODED\AC3\48000\{20_192,51_448}` (~1000 files each, the B23 library),
 `C:\DOS` 123, `C:\UPL\REF` 75, `C:\UPL\USER` 66. `C:\LOGDSP.TXT` grows at each UPL start.
-**Full file-level backup DONE → `results/DISK/`** via `scratchpad/upl_backup.py --dirlist`
+**Full file-level backup DONE → `results/DISK/`** via `tools/upl_backup.py --dirlist`
 (then named `gpib_backup.py`):
 all 2 586 listed files, 2 583 at exactly the listed size; the other 3 are logs rewritten at UPL
 start (`C:\LOGDSP.TXT`, `C:\UPL\LOGDSP.TXT`) and `DIRLIST.TXT` itself. `manifest.csv` has SHA‑256s.
@@ -1129,7 +1132,7 @@ are complete. Copy the 18 files over if single-channel is ever needed. A stray `
 
 Flat passthrough on output 1 (EQ off, crossover off, gain 0dB), B1 low-distortion generator,
 `SENS1:FUNCtion 'THDN'`, external balanced path (`INP:TYPE BAL`, `INP:SEL CH2I`). Script:
-`scratchpad/dcx_thdn.py` (ephemeral; reuses the `dcx2496`/`upl_capture` classes directly rather
+`measurements/dcx_thdn.py` (ephemeral; reuses the `dcx2496`/`upl_capture` classes directly rather
 than `dcx_sweep.py`'s `Sweeper`, since it needed a level sweep too, not just frequency).
 
 **vs frequency (1.0V RMS ≈ +2.2dBu):** flat ~−88 to −89dB (0.0035-0.004%) below 1kHz; degrades
@@ -1172,7 +1175,7 @@ identified (real HF distortion, not just a noisy low end).
 
 ### Full characterization gauntlet, 2026‑09‑23 — gain, filter-type comparison, limiter
 
-Script: `scratchpad/dcx_gauntlet.py`. Output 1 only (still only 2 cables patched: UPL gen -> DCX
+Script: `measurements/dcx_gauntlet.py`. Output 1 only (still only 2 cables patched: UPL gen -> DCX
 input A, DCX out1 -> UPL analyzer in; crosstalk/other-outputs deferred until more XLR cables).
 
 **A. Gain accuracy** (1kHz, 1.0V in, DCX gain stepped -15 to +15dB): **error is a constant +0.41
@@ -1207,7 +1210,7 @@ of the above on outputs 2-6 to map the full crossover topology.
 
 ### Balanced vs single-ended comparison, 2026‑09‑23
 
-Script: `scratchpad/dcx_balanced_test.py <mode>`. UPL analyzer input is a single XLR jack (per
+Script: `measurements/dcx_balanced_test.py <mode>`. UPL analyzer input is a single XLR jack (per
 Vol.2 manual §2.6.2) — there's no separate unbalanced connector; unbalanced operation means only
 pin2(hot) is effectively driven, with `INPut[1|2]:LOW FLOat|GROund` controlling whether the outer
 conductor ties to chassis ground. Chain tested: **balanced** = DCX2496 out1 XLR → UPL XLR analyzer
@@ -1338,7 +1341,7 @@ longer settle after the frequency change.
 ## `FLAT_GEN.BAS` — generator flatness calibration (decompiled 2026‑09‑23)
 
 No loose copy exists on this PC. It lives only inside `DISK2/USER.LZH`
-(`python scratchpad/lzh_extract.py DISK2/USER.LZH FLAT_GEN.BAS`), and ships to `C:\UPL\USER\` on
+(`python tools/lzh_extract.py DISK2/USER.LZH FLAT_GEN.BAS`), and ships to `C:\UPL\USER\` on
 the instrument. Runs as a UPL‑B10 macro (we have B10). Companion setup `FLAT_GEN.SAC` is in the
 same archive.
 
@@ -1622,7 +1625,7 @@ laptop→USB→M51 chain replays them directly, with the UPL as analyzer and the
 giving R&S's own measurement configuration. That turns 1GA21 into a runnable procedure for the M51
 without owning the physical disc or a transport.
 
-**Implemented as `scratchpad/upacd_test.py` (2026‑09‑23, not yet run against hardware).** Plays a
+**Implemented as `measurements/upacd_test.py` (2026‑09‑23, not yet run against hardware).** Plays a
 track from this PC into any DUT while the UPL measures. The DUT is whatever sits between the sound
 device and the analyzer input, so `--device` alone switches between the M51, the DCX chain, and
 **the laptop's own output** — the last being a better test of the laptop codec than `audio_tests.py`

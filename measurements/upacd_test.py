@@ -40,13 +40,13 @@ NOT YET RUN AGAINST HARDWARE. Use --dry-run to exercise the whole pipeline --
 segmentation included -- with no instrument and no audio device.
 
 Examples:
-    python scratchpad/upacd_test.py --dry-run linearity
-    python scratchpad/upacd_test.py devices
-    python scratchpad/upacd_test.py --upl-port COM7 --device 16 --exclusive \
+    python measurements/upacd_test.py --dry-run linearity
+    python measurements/upacd_test.py devices
+    python measurements/upacd_test.py --upl-port COM7 --device 16 --exclusive \
         --label m51_44k linearity -o results/m51_linearity.csv
-    python scratchpad/upacd_test.py --upl-port COM7 --device 5 --exclusive \
+    python measurements/upacd_test.py --upl-port COM7 --device 5 --exclusive \
         --label laptop_builtin linearity -o results/laptop_linearity.csv
-    python scratchpad/upacd_test.py --upl-port COM7 --device 16 --exclusive \
+    python measurements/upacd_test.py --upl-port COM7 --device 16 --exclusive \
         segments --track 6 --tones 20,40,100,200,500,1000,5000,7000,10000,16000,18000,20000
 """
 

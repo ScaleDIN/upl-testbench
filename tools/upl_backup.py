@@ -22,10 +22,10 @@ DON'T interrupt a transfer mid-file: over GPIB that hung UPL_UI.EXE until a
 power cycle. Let the current file finish.
 
 Usage:
-  python scratchpad/upl_backup.py --port COM2 --outdir results/CAL \
+  python tools/upl_backup.py --port COM2 --outdir results/CAL \
       --dirs C:\\UPL\\REF C:\\UPL\\SETUP --names AGEN.CAL ANLR0.CAL
-  python scratchpad/upl_backup.py --port COM2 --outdir results/X --paths C:\\DIRLIST.TXT
-  python scratchpad/upl_backup.py --port GPIB0::20::INSTR --outdir results/DISK \
+  python tools/upl_backup.py --port COM2 --outdir results/X --paths C:\\DIRLIST.TXT
+  python tools/upl_backup.py --port GPIB0::20::INSTR --outdir results/DISK \
       --dirlist results/DISK/DIRLIST.TXT --skip-existing
 
 Writes <outdir>/<path on the UPL>, and appends to <outdir>/manifest.csv

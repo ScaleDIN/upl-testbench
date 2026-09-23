@@ -12,8 +12,8 @@ the analyzer's noise floor (~1e-5V) with THD+N near 0dB, the signal isn't actual
 the analyzer -- check the physical connections before trusting the numbers.
 
 Usage:
-  python scratchpad/dcx_balanced_test.py balanced     --dcx-port COM2 --upl-port COM7
-  python scratchpad/dcx_balanced_test.py single_ended --dcx-port COM2 --upl-port COM7
+  python measurements/dcx_balanced_test.py balanced     --dcx-port COM2 --upl-port COM7
+  python measurements/dcx_balanced_test.py single_ended --dcx-port COM2 --upl-port COM7
 """
 import argparse
 import json

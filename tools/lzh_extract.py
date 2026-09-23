@@ -5,8 +5,8 @@ The UPL firmware ships its content as .LZH archives (DISK2/*.LZH) and the
 LHA.EXE next to them is 16-bit DOS and will not run on 64-bit Windows, and
 neither `lha` nor 7-Zip is present on this PC -- hence this decoder.
 
-    python scratchpad/lzh_extract.py DISK2/USER.LZH SNDFILE.BAS > SNDFILE.BAS
-    python scratchpad/lzh_extract.py DISK2/USER.LZH SELFTEST.BAS | less
+    python tools/lzh_extract.py DISK2/USER.LZH SNDFILE.BAS > SNDFILE.BAS
+    python tools/lzh_extract.py DISK2/USER.LZH SELFTEST.BAS | less
 
 With no member name it lists the archive.  Output is raw bytes: the .BAS
 files are tokenized R&S BASIC, so pipe them through a printable-only filter
@@ -139,6 +139,9 @@ def read_clen_fixed(bs, fix):
     return None, fix
 
 if __name__ == '__main__':
+    if len(sys.argv) < 2 or sys.argv[1] in ('-h', '--help'):
+        print(__doc__, file=sys.stderr)
+        sys.exit(0 if len(sys.argv) >= 2 else 2)
     path = sys.argv[1]
     want = sys.argv[2] if len(sys.argv) > 2 else None
     d = open(path,'rb').read()

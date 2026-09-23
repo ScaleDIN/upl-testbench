@@ -10,7 +10,7 @@ flow control); UPL is read over RS232 (COM7, RTS/CTS). A continuous test tone
 is looped out the M51's USB input for the whole sweep.
 
 Usage:
-  python scratchpad/m51_gain_sweep.py --m51-port COM2 --upl-port COM7 --device 15
+  python measurements/m51_gain_sweep.py --m51-port COM2 --upl-port COM7 --device 15
 """
 import argparse
 import csv

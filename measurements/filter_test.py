@@ -13,7 +13,7 @@ A-weighting filter, and with a user 1-5 kHz bandpass. The FFT honours up to 3
 analyzer filters (Vol.1, FFT column of the filter table).
 
 Usage:
-  python scratchpad/filter_test.py --port COM2 -o results/filter_test
+  python measurements/filter_test.py --port COM2 -o results/filter_test
 Writes <o>_thdn.csv and <o>_fft.csv (freq, one column per filter case).
 Sends *RST first; leaves filters off, generator back on sine, 0 V.
 """

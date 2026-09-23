@@ -6,9 +6,9 @@
 
 # generated test output (CSV/JSON results, self-test reports) -- scripts are
 # the reusable part, not one session's numbers
-/scratchpad/*.csv
-/scratchpad/*.json
-/scratchpad/*.txt
+/measurements/*.csv
+/measurements/*.json
+/measurements/*.txt
 /upl_selftest_*.txt
 
 # per-unit identity and option key (DIAG:DEV dumps) -- never push these

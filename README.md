@@ -38,7 +38,7 @@ These provide the `import`-able classes the test scripts build on. Each is also 
 | `upl_capture.py` | R&S UPL, RS232 remote | SCPI, LF-terminated, 115200 8N1 RTS/CTS |
 | `dcx2496.py` | Behringer DCX2496, RS232 | MIDI-SysEx-style, 38400 8N1 (unofficial, reverse-engineered — see `dcx2496_protocol.md`) |
 | `nad_m51.py` | NAD M51 DAC, RS232 | ASCII `Var=Value`/`Var?`, 115200 8N1, no flow control |
-| `ser_in.py` | receives a file the UPL pushes via its `SNDFILE.BAS` macro | raw bytes, 115200, idle-timeout framing |
+| `ser_in.py` | receives a file the UPL pushes via its `SNDFILE.BAS` macro (superseded by `getfile` / `tools/upl_backup.py`) | raw bytes, 115200, idle-timeout framing |
 
 Quick examples:
 
@@ -48,13 +48,14 @@ python upl_capture.py --port COM7 probe
 python upl_capture.py --port COM7 raw "SYST:ERR?"
 python upl_capture.py --port COM7 autoexport -o sweep.csv
 
-# UPL: run the instrument's OWN sweep engine (NOT yet hardware-verified -- see below)
+# UPL: run the instrument's OWN sweep engine
 python upl_capture.py --port COM7 nsweep --start 20 --stop 20000 --points 40 -o fr.csv
 
-# UPL: have the instrument save its current trace to its own disk, for SNDFILE transfer
-python upl_capture.py --port COM7 storetrace "C:\UPL\FR.EXP" --xaxis
+# UPL: have the instrument save its current trace to its own disk, then pull that file
+python upl_capture.py --port COM7 storetrace "C:\UPL\FR.EXP"
+python upl_capture.py --port COM7 getfile "C:\UPL\FR.EXP" -o FR.EXP
 
-# UPL: full FFT spectrum, paging past the 1024-line limit (NOT yet hardware-verified)
+# UPL: full FFT spectrum, paging past the 1024-line limit
 python upl_capture.py --port COM7 fft --size 8192 -o fft.csv
 
 # DCX2496: enable remote, nudge a gain, set a crossover point
@@ -69,6 +70,11 @@ python nad_m51.py --port COM2 source
 ```
 
 `upl_capture.py --help`, `dcx2496.py --help`, `nad_m51.py --help` list every subcommand.
+
+**GPIB works too.** Anything that takes a UPL `--port` also accepts a VISA name such as
+`GPIB0::20::INSTR` (tested with an Agilent/Keysight 82357B; needs the Keysight IO Libraries Suite
+and `pip install pyvisa`). On the UPL: OPTIONS → Remote via → IEC, address 20. GPIB is ~10× faster
+than RS‑232 for file transfers; see `CLAUDE.md`, "GPIB (Agilent/Keysight 82357B)", for the gotchas.
 
 ### Working offline (`--dry-run`)
 
@@ -89,15 +95,15 @@ programs document (right commands, right order, `SWE1` not `SWE2`, `FORM ASC` no
 `nsweep` hands the whole sweep to the UPL's internal sweep engine (`SOUR:SWE:MODE AUTO` +
 `SOUR:FREQ:MODE SWE1`, one `INIT:CONT OFF;*WAI`, then `TRAC? TRAC1` / `TRAC? LIST1`) instead of
 stepping `SOUR:FREQ` from the host in a loop the way `dcx_sweep.py` does. Far fewer round trips —
-a 40-point sweep runs in ~17 s inside the instrument.
+a 40-point sweep runs in ~11 s inside the instrument.
 
-**`nsweep` and `storetrace` are written from the documentation and have not yet been run against
-the instrument.** An earlier live attempt at the native sweep failed (`TRAC:POIN? TRAC1` → `0`)
-because it used `SWE2` (which puts frequency on the *Z* axis, leaving trace A empty) and never set
-`DISP:TRAC:FEED` (without a feed the trace buffer has no source and records nothing). Both are
-fixed here, but treat the first real run as a bring-up — `CLAUDE.md`'s "UPL native sweep engine"
-section has the checklist and the full documentary basis. If a trace comes back empty, the tool now
-says so and names the likely cause instead of crashing in `float()`.
+**Verified live 2026‑09‑23** (internal loopback, flat to ±0.05 % from 20 Hz to 20 kHz). The two
+things that made an earlier attempt come back empty were `SWE2` (puts frequency on the *Z* axis)
+and a missing `DISP:TRAC:FEED`; both are fixed. Each sweep-parameter command takes 2–3 s on the
+instrument, so `nsweep` sends them one at a time with `*OPC?` in between. Don't combine slow
+commands on one line over a Prolific adapter: it duplicates bytes when the UPL pauses the
+transfer (drops CTS). If a trace does come back empty, the tool says so and names the likely
+cause.
 
 ### FFT readout: always page the blocks
 
@@ -134,7 +140,7 @@ It's opt-in because it writes a file to the instrument's disk.
 `nsweep --setup C:\UPL\MYSETUP.SAC` loads a stored setup first (`MMEM:LOAD:STAT 0`) — again how
 R&S's own programs configure a measurement, rather than sending every panel setting.
 
-### Backing up per-unit state (`diagdump`) — unverified
+### Backing up per-unit state (`diagdump`)
 
 ```bash
 python upl_capture.py --dry-run diagdump                          # offline, see what it would do
@@ -148,22 +154,25 @@ R&S's own selftest uses to read the serial number. The one chip holding this dat
 EEPROM on the Digital Board) is cheap to replace, but its contents aren't; this is the attempt to
 back them up without opening the case.
 
-Only `SERN` is proven. The other selector names come from the firmware's keyword table and are
-inferred — `CLAUDE.md` has the reasoning. Safety is enforced in code: it can only send the query
-form (`DATA?`), it refuses selectors that sound like live hardware access before sending anything,
-and it checks `SYST:ERR?` after every step. Start with `--devices SERN` — the serial is known, so
-that first run can be checked against a known answer.
+Safety is enforced in code: it can only send the query form (`DATA?`), it refuses selectors that
+sound like live hardware access before sending anything, and it checks `SYST:ERR?` after every step.
+
+**Run 2026‑09‑23:** `SERN` (serial) and `INSTkey` (option key) read out; the calibration selectors
+(`CAGEn`, `CANLr0`, `CLDG`, `CDPHase`) are refused with `-222`. That turned out not to matter:
+the calibration lives in ordinary disk files, which `tools/upl_backup.py` pulls (below). Keep the
+output private — it contains the serial and option key; `results/` is git-ignored for that reason.
 
 ### Getting a stored file off the UPL
 
-`storetrace` is the "save on the instrument" half — it writes the trace (and optionally the X-axis
-list) to a file on the UPL's own disk via `MMEM:STOR:TRAC` / `MMEM:STOR:LIST`. Formats: `exp` (bare
-text table, best for the PC, but the UPL can't read it back), `asc`, `bin`. Moving that file to the
-PC is a separate step — the SNDFILE / `ser_in.py` route described under "Data-egress tools" below.
-`storetrace` prints the exact three steps when it finishes.
+`storetrace` writes the trace to a file on the UPL's own disk via `MMEM:STOR:TRAC` (formats: `exp`
+= a plain text table that already includes the X axis, which the UPL itself can't read back; `asc`;
+`bin`). `getfile` then pulls any file off the disk with `MMEM:DATA?` and prints the MD5 the UPL
+computes for it (`MMEM:CHECK?`) so you can compare. It works over both RS‑232 and GPIB; App Note
+1GA42 says this isn't supported, which is wrong for firmware 3.06. For more than a file or two,
+use `tools/upl_backup.py`.
 
-For most purposes `autoexport` or `nsweep` is simpler: both pull the numbers straight over the wire
-with no file created on the UPL at all.
+For just the numbers, `autoexport` or `nsweep` is simpler, and more precise: `TRAC?` gives 6
+significant digits, while an EXPort file has only the 4 digits shown on the display.
 
 ## UPL self-test
 
@@ -215,32 +224,32 @@ previous test (fix: `*RST`), and an all-noise-floor result with no frequency loc
 the DCX2496 output is muted (fix: `dcx2496.py --port COM2 mute out1 off`). Both were real bugs
 hit during development — see `CLAUDE.md`, "FIRST REAL AUTOMATED CROSSOVER MEASUREMENT."
 
-**`scratchpad/` DCX2496 tests** — more specific characterizations, each a standalone script:
+**`measurements/` DCX2496 tests** — more specific characterizations, each a standalone script:
 
 ```bash
 # THD+N vs frequency and vs level, flat passthrough
-python scratchpad/dcx_thdn.py --dcx-port COM2 --upl-port COM7 -o results/dcx_thdn.csv
+python measurements/dcx_thdn.py --dcx-port COM2 --upl-port COM7 -o results/dcx_thdn.csv
 
 # separates THD+N into pure THD (harmonics) vs noise contribution, vs frequency --
 # use this instead of dcx_thdn.py if you want to know whether a bad number is really
 # distortion or just the DCX's noise floor (see CLAUDE.md for what this revealed)
-python scratchpad/dcx_thd_vs_thdn.py --dcx-port COM2 --upl-port COM7 -o results/dcx_thd_vs_thdn.csv
+python measurements/dcx_thd_vs_thdn.py --dcx-port COM2 --upl-port COM7 -o results/dcx_thd_vs_thdn.csv
 
 # gain accuracy (+/-15dB), filter-type comparison (Butterworth/Bessel/Linkwitz-Riley
 # at several orders), and limiter behavior, all in one run
-python scratchpad/dcx_gauntlet.py --dcx-port COM2 --upl-port COM7 -o results/dcx_gauntlet.json
+python measurements/dcx_gauntlet.py --dcx-port COM2 --upl-port COM7 -o results/dcx_gauntlet.json
 
 # balanced (XLR direct) vs single-ended (via XLR-to-RCA-to-XLR adapters) comparison --
 # run once per physical wiring state with a different mode label
-python scratchpad/dcx_balanced_test.py balanced     --dcx-port COM2 --upl-port COM7
-python scratchpad/dcx_balanced_test.py single_ended --dcx-port COM2 --upl-port COM7
+python measurements/dcx_balanced_test.py balanced     --dcx-port COM2 --upl-port COM7
+python measurements/dcx_balanced_test.py single_ended --dcx-port COM2 --upl-port COM7
 ```
 
 `dcx_balanced_test.py` warns inline if a run's level is near the noise floor with THD+N near
 0dB — that pattern means the signal isn't actually reaching the analyzer (check the physical
 adapter chain), not a real balanced/unbalanced difference.
 
-## UPA-CD test-disc playback (`scratchpad/upacd_test.py`)
+## UPA-CD test-disc playback (`measurements/upacd_test.py`)
 
 Plays R&S Audio Test Disc tracks from this PC into any DUT while the UPL measures. The DUT is
 whatever sits between the sound device and the UPL's analyzer input, so the same script covers the
@@ -248,18 +257,18 @@ M51, the DCX2496, or **this laptop's own output** — just point `--device` at a
 `--label` the run:
 
 ```bash
-python scratchpad/upacd_test.py devices                       # find the output index
+python measurements/upacd_test.py devices                       # find the output index
 
 # NAD M51 over USB
-python scratchpad/upacd_test.py --upl-port COM7 --device 16 --exclusive \
+python measurements/upacd_test.py --upl-port COM7 --device 16 --exclusive \
     --label m51_44k linearity -o results/m51_linearity.csv
 
 # the laptop's own headphone/line output (needs a 3.5mm -> XLR adapter into the UPL)
-python scratchpad/upacd_test.py --upl-port COM7 --device 5 --exclusive \
+python measurements/upacd_test.py --upl-port COM7 --device 5 --exclusive \
     --label laptop_builtin linearity -o results/laptop_linearity.csv
 
 # any stepped-tone track, generic
-python scratchpad/upacd_test.py --upl-port COM7 --device 16 --exclusive segments \
+python measurements/upacd_test.py --upl-port COM7 --device 16 --exclusive segments \
     --track 6 --tones 20,40,100,200,500,1000,5000,7000,10000,16000,18000,20000
 ```
 
@@ -295,36 +304,100 @@ whatever Windows' own resampler produces).
 
 ```bash
 # frequency response + THD+N-vs-frequency at a given USB sample rate
-python scratchpad/m51_freq_response.py --fs 48000 --device 16 -o results/m51_fr_48k.csv
+python measurements/m51_freq_response.py --fs 48000 --device 16 -o results/m51_fr_48k.csv
 
 # THD+N/THD/noise vs the M51's own volume setting -- finds the best gain to leave
 # it at when something downstream handles level control
-python scratchpad/m51_gain_sweep.py --device 16 --fs 48000 -o results/m51_gain_sweep_48k.csv
+python measurements/m51_gain_sweep.py --device 16 --fs 48000 -o results/m51_gain_sweep_48k.csv
 
 # CCIF twin-tone IMD (19k+20k by default) via the UPL's DFD analyzer function
-python scratchpad/m51_imd.py --fs 48000 --device 16
+python measurements/m51_imd.py --fs 48000 --device 16
 
 # frequency-counter scatter across many rapid readings -- a coarse jitter/clock-
 # stability proxy, directly comparable across sample rates
-python scratchpad/m51_freq_stability.py --fs 96000 --device 16 -o results/m51_jitter_96k.csv
+python measurements/m51_freq_stability.py --fs 96000 --device 16 -o results/m51_jitter_96k.csv
 
 # FFT-based sideband/jitter check (needs CALC:TRAN:FREQ:ZOOM 1 -- see the script's
 # docstring for a hard-won firmware quirk about which zoom mode actually works)
-python scratchpad/m51_jitter_fft.py --fs 44100 --device 16 -o results/m51_jitter_fft_44k.csv
+python measurements/m51_jitter_fft.py --fs 44100 --device 16 -o results/m51_jitter_fft_44k.csv
 ```
 
 All M51 scripts default `--m51-port COM2 --upl-port COM7` — override if your ports differ.
 `--fs` is required on most of them (the whole point is comparing behavior across sample rates).
 
+## Analyzer filter checks (`measurements/filter_test.py`)
+
+Internal loopback only (`INP:TYPE GEN2`), so nothing needs to be patched. Two parts:
+
+- **Bandwidth-limited THD+N**: runs with no filter, then with a 5 kHz user lowpass that is
+  defined but not routed, then with 20/10/5/3 kHz lowpasses that *are* routed into a filter slot.
+  It shows that a user filter does nothing until it's routed (`SENS:FILT1:UFIL1 ON`).
+- **FFT through a filter**: white noise from the generator, 8k FFT, read unfiltered, through
+  A‑weighting, and through a 1–5 kHz user bandpass.
+
+```bash
+python measurements/filter_test.py --port COM2 -o results/filter_test   # -> _thdn.csv, _fft.csv
+```
+
+Sends `*RST` first; leaves filters off and the generator at 0 V. Keep user lowpass cutoffs at or
+below 20 kHz on the A22 analyzer: 22 kHz is accepted when defined but rejected when routed, and the
+filter then refuses further changes.
+
 ## Data-egress tools (getting files off the UPL)
 
-- `upl_capture.py autoexport` — triggers a fresh sweep and pulls trace + x-axis straight over the
-  wire to CSV, no file ever created on the UPL. The simplest, most reliable option.
-- `ser_in.py` — for the R&S-documented `SNDFILE.BAS`/`SER_IN.EXE` file-transfer mechanism (pulling
-  an actual file that already exists on the UPL's disk). `SER_IN.EXE` is 16-bit DOS and won't run
-  on modern 64-bit Windows; `ser_in.py` is the Python reimplementation. See its docstring for the
-  manual front-panel trigger sequence (the reliable one) vs. the remote/SCPI trigger sequence
-  (untested — see `CLAUDE.md` for the port-contention caveat).
+- **`upl_capture.py autoexport` / `nsweep`**: pull trace and X axis straight over the wire to
+  CSV. No file is created on the UPL. Best if you just want the measurement.
+- **`upl_capture.py getfile`**: pull one file off the UPL's disk (`MMEM:DATA?`), RS‑232 or GPIB.
+- **`tools/upl_backup.py`**: bulk backup of files off the UPL's disk, each one checked against the
+  MD5 the UPL computes itself and retried on a mismatch. About 10 kB/s over RS‑232 and
+  100–150 kB/s over GPIB. Read-only on the instrument, but it sends `INIT:FORC STOP` first,
+  which halts the running measurement (`--keep-running` to skip). **Don't interrupt a
+  file mid-transfer**: over GPIB that hung the UPL until a power cycle.
+
+  ```bash
+  # calibration files: try each name in each directory, keep the first hit
+  python tools/upl_backup.py --port COM2 --outdir results/CAL \
+      --dirs C:\\UPL\\REF C:\\UPL\\SETUP --names AGEN.CAL ANLR0.CAL LDG.CAL CAL_DIG.SAC
+
+  # the whole disk: `MMEM:CAT?` doesn't work on this firmware, so first make a listing on the UPL
+  # (quit to DOS: DIR C:\ /S /A > C:\DIRLIST.TXT), fetch it, then fetch everything it lists
+  python tools/upl_backup.py --port COM2 --outdir results/DISK --paths C:\\DIRLIST.TXT
+  python tools/upl_backup.py --port GPIB0::20::INSTR --outdir results/DISK \
+      --dirlist results/DISK/DIRLIST.TXT --skip-existing
+  ```
+  Writes `<outdir>/<path on the UPL>` plus `manifest.csv` (bytes, SHA‑256, MD5 check result).
+  `--count-only` just totals a listing.
+
+- **`ser_in.py` / `tools/sndfile_batch.py`** use R&S's own route, `SNDFILE.BAS`. **Superseded by
+  `upl_backup.py`**; kept for reference. `ser_in.py` reimplements R&S's `SER_IN.EXE` (16‑bit DOS,
+  won't run on 64‑bit Windows) and receives one file. `sndfile_batch.py` handles the PC side of a
+  multi-file SNDFILE pull, while the operator runs the macro on the front panel for each file.
+  Every SNDFILE run takes COM2 away from remote control until you reselect it on the OPTIONS panel.
+  Serial mode verified; GPIB mode (`--port GPIB0::20::INSTR --data-port COM2`) didn't work when
+  tried by hand.
+
+## Firmware archive extraction (`tools/lzh_extract.py`)
+
+The firmware disks and several app notes ship as `.LZH` (LHA) archives. `LHA.EXE` is 16‑bit DOS,
+so this is a pure-Python `-lh5-` decoder:
+
+```bash
+python tools/lzh_extract.py DISK2/USER.LZH                          # list members
+python tools/lzh_extract.py DISK2/USER.LZH SNDFILE.BAS > SNDFILE.BAS
+```
+
+Output is raw bytes. The `.BAS` files are tokenized R&S BASIC; string literals are readable,
+the rest isn't. (Windows' own `C:\Windows\System32\tar.exe` also reads `.LZH`. This script is
+for when that isn't available or you want a single member on stdout.)
+
+## Folder layout
+
+| Folder | Contents |
+|---|---|
+| top level | core control libraries (`upl_capture.py`, `dcx2496.py`, `nad_m51.py`, `ser_in.py`), `dcx_sweep.py`, `upl_selftest.py`, `audio_tests.py` |
+| `measurements/` | characterization scripts: each drives the UPL (and usually a DUT) through one test and writes CSV/JSON |
+| `tools/` | utilities: disk/file backup, SNDFILE batch transfer, LZH extraction |
+| `results/` | measurement output and instrument backups, **git-ignored** (it holds the serial number, option key and calibration) |
 
 ## Where things are documented
 

@@ -5,7 +5,7 @@ tests in one run, using the UPL (B1 generator + analyzer). See CLAUDE.md, 2026-0
 "Full characterization gauntlet" for the reference results this produced.
 
 Usage:
-  python scratchpad/dcx_gauntlet.py --dcx-port COM2 --upl-port COM7 -o dcx_gauntlet.json
+  python measurements/dcx_gauntlet.py --dcx-port COM2 --upl-port COM7 -o dcx_gauntlet.json
 """
 import argparse
 import json
