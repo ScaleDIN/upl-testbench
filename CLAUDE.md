@@ -74,8 +74,10 @@ The CPU board is the **least R&S‑proprietary part** and is replaceable from th
   finally explains all three branches of `AUTOEXEC.UPL`'s CPU mapping — `SX386` is for the MOD 02
   386 boards, `UM486` for MOD 05, `UM586` for 06/66 — which the firmware analysis alone couldn't.
   Same list: **Hitachi DK222A‑54, 2.5″ 540 MB IDE hard disk**, **Sony MPF520 3.5″ floppy**.
-  **Which generation *this* unit is has not been checked** — it matters for the replacement target
-  and for 16‑bit WAV support. Look at the boot screen / BIOS banner or the model plate.
+  **This unit: Cyrix/National MediaGX, ~300 MHz** (user-reported 2026‑09‑23, from memory — "I think";
+  confirm from the BIOS banner at next boot). MediaGX was later sold as the **Geode GX1**, so this
+  is the later generation, and the firmware takes the `UM586` branch. It matches the "Kontron Geode
+  GX1 module" original fit listed above. It is *not* one of the 386/486 early units.
 - **R&S's own statement on repairability** (Service Manual Vol.2 contents page): *"All modules not
   listed above are no R&S developments but parts from subsuppliers… repair down to component level
   is not possible. In the case of complaint, the complete module has to be replaced."* The CPU
@@ -96,6 +98,18 @@ The CPU board is the **least R&S‑proprietary part** and is replaceable from th
 - Must tolerate/ignore **−15V on B7** (the UPL busses −15V onto the standard −12V pin).
 - Best candidate: an **ICOP/DMP Vortex86 ISA SBC** (native DOS, real ISA, VGA/IO disable‑able).
   Zero‑risk alt: NOS **AI5VG+** or sibling Socket‑7 half‑size card.
+- **FPU: not required, but choose a board that has one** (checked 2026‑09‑23). `UPL_UI.EXE` is
+  built with Borland's FPU *emulator*. The binary holds **~25,760 `INT 34h–3Dh` emulator hooks**
+  (background for unused vectors: 0–1) and only 138 raw `FWAIT`+ESC pairs. The runtime patches
+  those hooks into real x87 instructions when an FPU is present and emulates them in software when
+  not — which is how the MOD 02 386DX40 units ran the same code. Our MediaGX has an on-chip FPU.
+  So a **Vortex86SX (no FPU) would run the firmware but emulate floating point**, and with ~25k FP
+  sites in the control/UI code that's a real slowdown. It would affect speed, not results: the
+  heavy DSP maths is on the TMS320C3x cards either way. **Prefer a Vortex86 variant with an FPU
+  (DX, MX)** so the swap behaves like the current board.
+- **Clock: ~300 MHz is proven safe on this unit.** The "moderate clock, beware DOS delay loops"
+  concern above now has a data point: at least up to the MediaGX's ~300 MHz there's no problem.
+  Much faster boards remain untested.
 
 ### Longevity action plan (priority order)
 1. **Image the mainframe boot disk (raw) and archive the calibration data NOW** — the only
@@ -1215,10 +1229,11 @@ installed.
 
 Vol.1 §2.5.4.10 — `SOUR:FUNC ARB` + `MMEM:LOAD:LIST ARBitrary,'<file>'` accepts five formats:
 TTF and AWD (ASCII/designer output, max 16384 samples), **WAV (8- or 16-bit, _any length_;
-16‑bit needs model 06/66, i.e. a Pentium CPU — whether ours is has NOT been verified**; this
-line previously said "ours is, per the CPU analysis above", but that analysis describes the boards
-the 3.06 firmware supports, not this unit. The service manual shows early models ran 386 and 486
-boards — see "Shared Drive archive" below. Check the boot screen or the model plate), CPR
+16‑bit needs model 06/66, i.e. a Pentium CPU — ours is a ~300 MHz MediaGX, 586-class and the
+later generation, so very likely yes**. The manual states the requirement by *model number*
+rather than CPU, so the model plate is the definitive check. (An earlier version of this line
+asserted Pentium-class from the firmware's supported-board list alone; the user has since
+identified the CPU.) CPR
 (compressed, for 486-era units), and **ACC — "a special compressed waveform format for WAV files
 containing AC3 or MPEG data coded in line with IEC 61937", digital generator only.**
 
