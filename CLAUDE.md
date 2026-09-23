@@ -525,9 +525,10 @@ Subcommands:
 - `autoexport [-o] [--setup] [--both] [--repeat N --interval S] [--opc]` — **trigger a fresh sweep
   and pull trace(s)+x‑axis to a timestamped CSV; no file created on the UPL.** (Primary tool.)
 - `catalog [path]` — `MMEM:CAT?` list UPL files.
-- `getfile "C:\UPL\X.EXP" -o local` — pull an existing UPL file (488.2 block). **Unverified and
-  probably wrong** — 1GA42_0E says UPL→PC bulk transfer isn't supported over the bus; use the
-  SNDFILE/`ser_in.py` route instead. See the CORRECTION note above before relying on it.
+- `getfile "C:\UPL\X.EXP" -o local` — pull an existing UPL file (488.2 block) and print the UPL's
+  MD5 of it. **VERIFIED 2026‑09‑24 over both RS‑232 and GPIB** — 1GA42's "not supported" is wrong
+  for 3.06. For many files, with MD5 checking and retries, use `scratchpad/upl_backup.py`. See
+  "GPIB (Agilent/Keysight 82357B)" for both.
 - `raw "SCPI"` — send one command (query if it ends `?`).
 
 Example: `python upl_capture.py --port COM7 probe` then `… --port COM7 autoexport --opc`.
@@ -1026,8 +1027,36 @@ Internal loopback (`*RST; INP:TYPE GEN2`), UPL on PC COM2 at 115200.
 1GA42 says UPL→PC transfer isn't supported over the bus — **wrong for firmware 3.06 over GPIB.**
 Verified: `GL_EPI.LOG`, `GLEI_RAU.BPZ` (binary), `FLAT1AC.CAL`, `FLAT_GEN.CAL`, `EANSTR.XMM` all
 byte-identical to their SNDFILE copies. **~110–150 kB/s**, vs ~11 kB/s for SNDFILE at 115 kbaud,
-with no macro, no panel steps and no COM2. **SNDFILE is retired.** (Not tried over RS‑232: there's
-no EOI there, so a binary block has no safe end marker.)
+with no macro, no panel steps and no COM2. **SNDFILE is retired.**
+
+**It works over RS‑232 too (2026‑09‑24)** — the `#<n><len>` header frames the data, so no EOI is
+needed. `upl_capture.py getfile` fetched `GL_EPI.LOG`, `GLEI_RAU.BPZ` (binary), `FLAT_GEN.CAL`
+byte-identical; `scratchpad/upl_backup.py --port COM2` then pulled all 7 calibration files,
+first attempt, byte-identical to the GPIB copies. **~10 kB/s** (the 115 200‑baud ceiling): the
+calibration set in ~10 s, the whole 40 MB disk in ~70 min. **Serial-only owners need neither
+SNDFILE nor a GPIB adapter.**
+
+**`MMEM:CHECK? '<path>'` returns the file's MD5**, computed on the instrument, as 32 hex digits —
+verified against local MD5s. `upl_backup.py` checks every file against it and retries (up to
+`--retries 3`) on a mismatch. That check is what caught everything below.
+
+RS‑232 lessons, each learned the hard way the same day:
+- **Never change the serial timeout while data is flowing.** pyserial on Windows applies a timeout
+  change by re-sending the whole port configuration; doing it right after the `#` arrived made the
+  PL2303 garble or drop a byte **every time — always exactly one byte short**, whatever the file
+  size (`739/740`, `8656/8657`, `84439/84440`; once the length digits themselves, `b'8444f'`).
+  `getfile` never did that and was always clean. Set it once, before the request.
+- **Replies queue in the UPL across sessions.** With RTS/CTS, if the PC stops reading mid-reply the
+  UPL just waits, and resumes sending the moment *any* program next opens the port — so the next
+  run reads the tail of an old file as its answers (looked like total line garbage; was actually
+  readable `R&S_EXAM.SPO` content). **Fix: open the port and read until ~5 s of silence** — that
+  drained **1 018 635 bytes** in 102 s here — or power-cycle the UPL.
+- **CD (carrier detect) off on the PC side = the cable isn't seated.** With the connector loose the
+  UPL saw our bytes (frame errors at wrong bauds) but nothing came back; CTS/DSR still read True.
+  Screw both ends in.
+- `upl_backup.py` sends `INIT:FORC STOP` first, as `RS232_BT.BAS`/`getfile` do "for clean
+  transfer" (`--keep-running` to skip). It did not turn out to be the cause of the corruption
+  (the timeout reconfigure was), but it's R&S's own practice. **It halts the running measurement.**
 
 Setup: Keysight IO Libraries Suite (2023 U1 worked; **needed a PC reboot** before VISA would load —
 `VI_ERROR_LIBRARY_NFOUND` until then) + `pip install pyvisa`. UPL: OPTIONS → **Remote via → IEC**,
@@ -1040,7 +1069,7 @@ Hard-won details:
   syncs with `*IDN?` instead, reading until the reply really is the IDN.
 - **Exception: a write that times out on open** means the UPL is still sending a reply from a
   killed session → Device Clear, then retry. Built in.
-- **Never kill a GPIB transfer mid-block.** Stopping `gpib_backup.py` partway through a file
+- **Never kill a GPIB transfer mid-block.** Stopping `gpib_backup.py` (now `upl_backup.py`) partway through a file
   **hung UPL_UI** — serial poll still answered (STB 16/20, MAV set), but no read returned data and
   writes timed out; Device Clear and IFC didn't recover it. **Power cycle** did.
 - **Read blocks to EOI, with the LF termchar OFF.** With it on, VISA ends each read at every 0x0A
@@ -1071,7 +1100,8 @@ don't exist — by name, error logs from a failed calibration.
 previous owner; R&S originals (`AUTOEXEC.UPL`, `CONFIG.UPL`, `CONFIG.IEC`…) keep 2000–01 dates.
 Biggest dirs: `C:\CODED\AC3\48000\{20_192,51_448}` (~1000 files each, the B23 library),
 `C:\DOS` 123, `C:\UPL\REF` 75, `C:\UPL\USER` 66. `C:\LOGDSP.TXT` grows at each UPL start.
-**Full file-level backup DONE → `results/DISK/`** via `scratchpad/gpib_backup.py --dirlist`:
+**Full file-level backup DONE → `results/DISK/`** via `scratchpad/upl_backup.py --dirlist`
+(then named `gpib_backup.py`):
 all 2 586 listed files, 2 583 at exactly the listed size; the other 3 are logs rewritten at UPL
 start (`C:\LOGDSP.TXT`, `C:\UPL\LOGDSP.TXT`) and `DIRLIST.TXT` itself. `manifest.csv` has SHA‑256s.
 Not a substitute for a raw image (no boot sector, no partition table), but every file.
