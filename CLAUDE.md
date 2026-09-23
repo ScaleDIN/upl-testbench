@@ -1025,6 +1025,32 @@ laptop→USB→M51 chain replays them directly, with the UPL as analyzer and the
 giving R&S's own measurement configuration. That turns 1GA21 into a runnable procedure for the M51
 without owning the physical disc or a transport.
 
+**Implemented as `scratchpad/upacd_test.py` (2026‑09‑23, not yet run against hardware).** Plays a
+track from this PC into any DUT while the UPL measures. The DUT is whatever sits between the sound
+device and the analyzer input, so `--device` alone switches between the M51, the DCX chain, and
+**the laptop's own output** — the last being a better test of the laptop codec than `audio_tests.py`
+can manage, since that measures with the laptop's own ADC.
+
+Design notes worth keeping:
+- **Segmentation is frequency-based, not time-based.** Track 4 delimits each level step with a 3 s
+  2 kHz marker at 0 dBFS, so the script polls RMS + `SENS3:DATA?` continuously and groups the
+  stream by measured frequency. No dependence on absolute timing across USB buffering. Median per
+  run, not mean, so one settling reading inside a run cannot move it; runs shorter than
+  `--min-samples` are discarded as transients.
+- **The 0 dBFS reference comes from the markers themselves**, so the result is independent of the
+  DUT's absolute gain and of the UPL's input range setting.
+- Steps below the DUT's noise floor produce no frequency lock and simply drop out — reported as a
+  warning, because that *is* the measurement.
+- `linearity` refuses to run without `--exclusive` (override: `--allow-shared`). Shared-mode
+  resampling would give a plausible-looking but meaningless −91 dBFS number; better to refuse.
+- Tracks are read straight out of the 809 MB zip, nothing unpacked.
+- Offline-tested: settling samples dropped, ±3 % frequency jitter tolerated, short transients
+  rejected, outlier-inside-a-run ignored, below-noise-floor steps dropping out, and a deliberate
+  +0.40 dB error injected at −91.2 dB recovered exactly.
+
+Cross-check that the rip matches the booklet: track 4 is 22.9 MB = 130 s at 44.1/16/stereo, and the
+booklet's last step starts at 02:00 and runs 10 s. Consistent.
+
 ### UPL‑B23 "Coded Audio Signal Generation"
 
 `UPL-B23 - …zip`, 15 MB: three floppy images + their extracted contents + `CODED.zip` (2030 files).

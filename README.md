@@ -220,6 +220,50 @@ python scratchpad/dcx_balanced_test.py single_ended --dcx-port COM2 --upl-port C
 0dB — that pattern means the signal isn't actually reaching the analyzer (check the physical
 adapter chain), not a real balanced/unbalanced difference.
 
+## UPA-CD test-disc playback (`scratchpad/upacd_test.py`)
+
+Plays R&S Audio Test Disc tracks from this PC into any DUT while the UPL measures. The DUT is
+whatever sits between the sound device and the UPL's analyzer input, so the same script covers the
+M51, the DCX2496, or **this laptop's own output** — just point `--device` at a different output and
+`--label` the run:
+
+```bash
+python scratchpad/upacd_test.py devices                       # find the output index
+
+# NAD M51 over USB
+python scratchpad/upacd_test.py --upl-port COM7 --device 16 --exclusive \
+    --label m51_44k linearity -o results/m51_linearity.csv
+
+# the laptop's own headphone/line output (needs a 3.5mm -> XLR adapter into the UPL)
+python scratchpad/upacd_test.py --upl-port COM7 --device 5 --exclusive \
+    --label laptop_builtin linearity -o results/laptop_linearity.csv
+
+# any stepped-tone track, generic
+python scratchpad/upacd_test.py --upl-port COM7 --device 16 --exclusive segments \
+    --track 6 --tones 20,40,100,200,500,1000,5000,7000,10000,16000,18000,20000
+```
+
+`linearity` runs disc **track 4**, which steps 1 kHz down to **−91.2 dBFS** — the bottom of the
+16-bit range, where DAC dither and truncation behaviour shows and a generated sweep does not probe.
+It reports measured level and error against nominal for each step.
+
+**No timing assumptions.** Track 4 delimits each level step with a 3 s 2 kHz tone at 0 dBFS, so
+rather than trusting absolute offsets across USB buffering the script polls the UPL's RMS +
+frequency continuously and segments the stream by measured frequency — the track is self-indexing.
+Levels that fall below the DUT's noise floor produce no frequency lock and drop out of the results,
+which is itself a finding rather than an error.
+
+**Bit-exact playback is mandatory.** Windows shared-mode resampling will quietly invalidate a
+−91 dBFS reading, so `linearity` refuses to run without `--exclusive` unless you pass
+`--allow-shared`. Check the DUT reports 44.1 kHz, not 48.
+
+Tracks are read straight out of `UPA-CD-….zip` — no need to unpack 809 MB. `--dry-run` exercises
+the whole pipeline, segmentation included, with no instrument and no audio device.
+
+**Level warning:** several disc tracks sit at 0 dBFS and the booklet warns they are "much higher
+than conventional program sources". Straight into the UPL analyzer that is fine; through an
+amplifier into speakers it is not. `CLAUDE.md` has the full track listing.
+
 ## NAD M51 DAC characterization
 
 Physical setup: laptop → USB → M51 (as the digital source) → M51 analog balanced output → UPL
