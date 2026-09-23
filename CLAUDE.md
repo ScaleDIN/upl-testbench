@@ -74,10 +74,41 @@ The CPU board is the **least R&S‑proprietary part** and is replaceable from th
   finally explains all three branches of `AUTOEXEC.UPL`'s CPU mapping — `SX386` is for the MOD 02
   386 boards, `UM486` for MOD 05, `UM586` for 06/66 — which the firmware analysis alone couldn't.
   Same list: **Hitachi DK222A‑54, 2.5″ 540 MB IDE hard disk**, **Sony MPF520 3.5″ floppy**.
-  **This unit: Cyrix/National MediaGX, ~300 MHz** (user-reported 2026‑09‑23, from memory — "I think";
-  confirm from the BIOS banner at next boot). MediaGX was later sold as the **Geode GX1**, so this
-  is the later generation, and the firmware takes the `UM586` branch. It matches the "Kontron Geode
-  GX1 module" original fit listed above. It is *not* one of the 386/486 early units.
+  **This unit — CONFIRMED from a photo of the board (2026‑09‑23):** a **Kontron** module carrying
+  a **National Geode GX1‑300B‑85‑2.0** (300 MHz, on-chip x87 FPU) — the "Kontron Geode GX1 module"
+  original fit listed above. Firmware takes the `UM586` branch. Not one of the 386/486 early units.
+  (The user had first said "a MediaGX at 300 MHz, I think" — right family: MediaGX became the GX1.)
+
+  | Part | Marking | Role |
+  |---|---|---|
+  | CPU | Geode GX1‑300B‑85‑2.0, ©2000 NSC, V2S0A404AB A3 | 300 MHz x86 with integrated FPU and graphics core |
+  | Companion | Geode CS5530A‑UCE | video output, IDE, audio, PCI→ISA bridge |
+  | Super I/O | Winbond W83977F‑A | FDC, serial/parallel, keyboard controller |
+  | BIOS flash | ST M29F040B (512 KB) | BIOS |
+  | Label | **Kontron 18003‑1280‑30‑1RS1**, S/N **YO4680032** | module part number |
+  | Sockets | SO‑DIMM (RAM); **CompactFlash** — empty in the photo | |
+  | Date codes | ST flash "0433", IDT logic "K0435M" | module built ~2004 |
+
+  **Form factor: probably ETX** (95 × 114 mm, four corner mounts, sits on a carrier). ETX modules
+  carry both PCI and ISA on their four underside connectors, which is exactly what a UPL needs. Not
+  yet confirmed — the underside wasn't photographed.
+
+  **What this changes for the longevity plan:**
+  1. **Exact spare to hunt for:** Kontron **18003‑1280‑30‑1RS1**. A same-part NOS or pulled module
+     is the zero-engineering option (plan step 2), better than "a Geode GX1 module" in general.
+  2. **If ETX is confirmed, a different ETX module on the *existing carrier* may be a lower-risk
+     fallback than the Vortex86 ISA SBC**, since the carrier and its UPL-side wiring would stay put.
+     Unverified: whether a given later ETX module keeps ISA, runs DOS, and matches ISA timing.
+  3. **The BIOS setup is state worth recording.** The module has its *own* video, IDE and floppy
+     controllers (CS5530A, W83977F), while this file's architecture notes put the UPL's video, IDE
+     and FDC on the mainframe. If those onboard devices are disabled in CMOS setup, a flat CMOS
+     battery or a setup reset could re-enable them and collide with the mainframe's. **Photograph
+     every BIOS setup screen** alongside the disk image in plan step 1. (Whether they're disabled
+     in CMOS or by hardware strapping isn't known yet.)
+  4. **The CompactFlash socket:** empty in this photo. Check whether the UPL boots from a CF card
+     here or from the mainframe's IDE disk — it decides what "image the boot disk" means. The
+     shared Drive archive has a "CompactFlash Card" photo folder suggesting another owner moved to
+     CF; the on-module socket would make that straightforward.
 - **R&S's own statement on repairability** (Service Manual Vol.2 contents page): *"All modules not
   listed above are no R&S developments but parts from subsuppliers… repair down to component level
   is not possible. In the case of complaint, the complete module has to be replaced."* The CPU
@@ -113,9 +144,14 @@ The CPU board is the **least R&S‑proprietary part** and is replaceable from th
 
 ### Longevity action plan (priority order)
 1. **Image the mainframe boot disk (raw) and archive the calibration data NOW** — the only
-   irreplaceable state. (Board is replaceable; its stored state is not.)
-2. **Buy a NOS spare** (AI5VG+ or Geode module), or a donor UPL — zero‑engineering insurance.
-3. **Qualify one Vortex86 ISA SBC** (VGA/IDE/FDC disabled) as the reproducible long‑term fallback.
+   irreplaceable state. (Board is replaceable; its stored state is not.) **Also photograph every
+   BIOS setup screen** — see the board notes above for why. First find out whether the unit boots
+   from the mainframe IDE disk or from the module's CompactFlash socket.
+2. **Buy a NOS spare** — now specifically **Kontron 18003‑1280‑30‑1RS1** (this unit's exact
+   module), or a donor UPL — zero‑engineering insurance.
+3. **Qualify a fallback.** If the module proves to be ETX, first try another ISA-capable ETX module
+   on the existing carrier; otherwise one Vortex86 ISA SBC with an FPU (DX/MX), VGA/IDE/FDC
+   disabled, as the reproducible long‑term fallback.
 
 ## Installed options (confirmed by user, 2026‑09‑22) — ALL options fitted
 
