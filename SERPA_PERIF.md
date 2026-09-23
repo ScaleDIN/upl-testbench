@@ -169,10 +169,47 @@ setup RAM is a second store, and its battery is a wear item.
 
 ### 2.7 DSP-mode side (D39/D40/D41)
 
-In DSP mode the register file appears as 8 words at the listed DSP addresses (DA0–2 = DSP
-A0–A2, 32-bit data). The DSP firmware `A.OUT`/`B.OUT` (TI COFF) programs those registers.
-**Not disassembled yet.** It is the natural next step, and the host-side layout above tells you
-what to look for: the same data/format/status structure.
+In DSP mode the register file appears as **8 consecutive 32-bit words** (DA0–2 = DSP A0–A2).
+It is **the same register file as the host side**: host register *n* at `0x390 + 0x800·n`
+corresponds to DSP word *n*. The ISA front-end only adds the SA1 low/high split and uses the
+spare register 5 for the external strobes.
+
+Source: TMS320C3x disassembly of `DSP.LZH → A.OUT` (DSP-A; TI COFF with 319 symbols, including
+the equate **`S_ANA_BASE = 0xC00000`**) and `B.OUT` (DSP-B; no symbols, but it has a pointer
+table listing `0xA00000–0xA00007`, skipping 5). Neither disassembler ships in Python, so a
+small decoder was written for this (general-format ops, direct/indirect/immediate addressing,
+tracking DP). The DSPs reach SERPA through an address register loaded from a pointer constant,
+then `*+AR6(n)`.
+
+| Word | R/W | Meaning | Evidence |
+|---|---|---|---|
+| 0 | W | **TX channel 0 data** (→ DX0/FSX0) | GEN mode 1 patches its ISR to `STI R0,*+AR6(8)` (GEN base + 0) |
+| 0 | R | **RX channel 0 data** (← DR0) | `ANA_IN` / `ANA_IN_RESET` flush reads |
+| 1 | W | **TX channel 1 data** (→ DX1/FSX1) | GEN mode 2 → `*+AR6(9)`; the `B5_TEST` ISR writes word 1 |
+| 1 | R | **RX channel 1 data** (← DR1) | ANA mode 3; DSP-B reads |
+| 2 | W | **Channel enable**: bit 0 = TX0, bit 1 = TX1, bit 2 = RX0, bit 3 = RX1 | GEN writes 1 or 2; ANA writes 6 or `0xA`; DSP-B writes 4 or 8; 0 = all off |
+| 2 | R | **Ready status**, same bit layout | the `B5_TEST` ISR tests `word2 & 2` before writing word 1 |
+| 3 | W | Clock/mode setup: **always 2** from the DSPs | all three DSP-side SERPAs at start-up |
+| 4 | W | **TX format**: bits 1:0 = word length/8 − 1 (host code `0x266e8` uses the same rule); bits 2/3 track which TX channel is active [I] | GEN `0x47` (TX0) / `0x4B` (TX1); ANA `0x247`; DSP-B `0x47` |
+| 5 | — | never touched by the DSPs | pointer table in B.OUT skips it |
+| 6 | W | **RX0 format**: bits 1:0 = word length; bits 9:5 = bit-count field (see §2.3) | ANA `0x3F3` / `0x3B3`; DSP-B `0x1E9` (16-bit words) |
+| 7 | W | **RX1 format** | ANA `0x3B3`; DSP-B `0x3C3` |
+
+Address confirmation: `STARTUP_GEN` uses the **same** `0xC00000` pointer with offsets 8–12, so
+GEN-SERPA (D39) sits at `0xC00008` and ANA-SERPA (D41) at `0xC00000`, exactly as the address
+decoder on sheet 12 says. DSP-B's SERPA (D40) is at `0xA00000`.
+
+Programmed values, by instance:
+
+| Instance | w2 (enable) | w3 | w4 (TX fmt) | w6 (RX0 fmt) | w7 (RX1 fmt) |
+|---|---|---|---|---|---|
+| D41 ANA-SERPA (`STARTUP_ANA`) | 0 → 6 or `0xA` when running | 2 | `0x247` | `0x3F3` / `0x3B3` by input mode | `0x3B3` |
+| D39 GEN-SERPA (`STARTUP_GEN`, `GEN_OUT`) | 0 → 1 (analog out) or 2 (digital TX1) | 2 | `0x47` / `0x4B` | — | — |
+| D40 DSP-B SERPA (B.OUT `0x25c6`) | 4 or 8 | 2 | `0x47` | `0x1E9` | `0x3C3` |
+
+The remaining unknowns are the exact meaning of the word 3 and word 4 upper bits, and the RX
+"bit-count" field (0x3F3 doesn't decode cleanly under the host-side formula). These only matter
+for a gate-exact replacement. A logic analyser on FSX/FSR while switching modes would settle them.
 
 ---
 
@@ -322,8 +359,8 @@ Bit 6 is the direction and bit 7 the step pulse. It resets to mid-scale (`0x20`)
 
 ## 5. Next steps, in order of value
 
-1. Disassemble `A.OUT`/`B.OUT` (TMS320C3x) for accesses to `0xC00000–0xC0000F` / `0xA00000`.
-   That gives the DSP-mode register map and completes SERPA.
+1. SERPA is done as far as the firmware goes (host + DSP sides, §2.3–2.7). What's left is
+   bit-level format detail that needs a logic analyser.
 2. PERIF2 is done as far as the firmware goes. Registers 6 and 8–10 and reg 14 bit 7 can only
    be named by experiment (a replacement design could simply latch them).
 3. Record the setup-RAM battery (G2, 3.4 V) as a maintenance item and back up the RAM
