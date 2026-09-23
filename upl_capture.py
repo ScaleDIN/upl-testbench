@@ -20,8 +20,15 @@ Examples:
   python upl_capture.py --port COM4 probe
   python upl_capture.py --port COM4 read
   python upl_capture.py --port COM4 sweep -o sweep.csv
+  python upl_capture.py --port COM4 nsweep --start 20 --stop 20000 --points 40 -o fr.csv
+  python upl_capture.py --port COM4 storetrace "C:\\UPL\\FR.EXP" --xaxis
   python upl_capture.py --port COM4 getfile "C:\\UPL\\MYTRACE.EXP" -o MYTRACE.exp
   python upl_capture.py --port COM4 raw "SENS:DATA?"
+
+Offline: every subcommand accepts --dry-run, which swaps the serial link for a
+stub that prints the exact SCPI it would send and answers queries with canned
+values. No instrument, no --port needed. `seqcheck` asserts the emitted
+sequences still match the documented ones.
 """
 
 import argparse
@@ -86,8 +93,145 @@ class UPL:
         self.ser.read(1)  # trailing LF
         return bytes(data)
 
+    def set_timeout(self, seconds):
+        """Raise/lower the reply timeout (a native sweep can block for minutes)."""
+        self.ser.timeout = seconds
+
     def close(self):
         self.ser.close()
+
+
+class DryRunUPL:
+    """Offline stand-in for UPL: records every command, answers queries from a
+    canned table. Lets the whole tool be exercised -- and the exact SCPI
+    sequence reviewed -- without an instrument on the other end."""
+
+    IDN = "ROHDE & SCHWARZ, UPL, 3.06, 0.33"
+
+    def __init__(self, points=8, echo=True, fft_lines=None, fft_res=5.859375, fft_start=0.0):
+        self.sent = []
+        self.points = points
+        self.echo = echo
+        # When fft_lines is set the stub models the 1024-line block limit and
+        # DISP:TRAC:IND paging, so the FFT readout path can be tested offline.
+        self.fft_lines = fft_lines
+        self.fft_res = fft_res
+        self.fft_start = fft_start
+        self.block = 0
+
+    def _block_slice(self):
+        lo = self.block * FFT_BLOCK
+        hi = min(lo + FFT_BLOCK, self.fft_lines)
+        return lo, max(lo, hi)
+
+    # --- canned data -------------------------------------------------------
+    def _freqs(self):
+        import math
+        lo, hi, n = 20.0, 20000.0, self.points
+        if n == 1:
+            return [lo]
+        step = (math.log10(hi) - math.log10(lo)) / (n - 1)
+        return [round(10 ** (math.log10(lo) + i * step), 4) for i in range(n)]
+
+    def _levels(self):
+        return [round(0.9 + 0.01 * i, 5) for i in range(self.points)]
+
+    def _reply(self, cmd):
+        c = cmd.strip().upper()
+        if c.startswith("*IDN?"):
+            return self.IDN
+        if c.startswith("*OPC?"):
+            return "1"
+        if c.startswith("SYST:ERR"):
+            return '0,"No error"'
+        if c.startswith("CALC:TRAN:FREQ:RES"):
+            return f"{self.fft_res} Hz"
+        if c.startswith("CALC:TRAN:FREQ:SPAN"):
+            return f"{(self.fft_lines or 0) * self.fft_res} Hz"
+        if c.startswith("CALC:TRAN:FREQ:STAR"):
+            return f"{self.fft_start} Hz"
+        if c.startswith("CALC:TRAN:FREQ:STOP"):
+            return f"{self.fft_start + (self.fft_lines or 0) * self.fft_res} Hz"
+        if self.fft_lines is not None and (c.startswith("TRAC? ") or c.startswith("TRAC:POIN?")):
+            lo, hi = self._block_slice()
+            if c.startswith("TRAC:POIN?"):
+                return str(hi - lo)
+            if c.startswith("TRAC? LIST"):
+                return ",".join(f"{self.fft_start + i * self.fft_res:.4f}" for i in range(lo, hi))
+            return ",".join(f"{1e-5 + (1.0 if i == 512 else 0.0):.6g}" for i in range(lo, hi))
+        if c.startswith("TRAC:POIN?") or c.startswith("TRACE:POIN"):
+            return str(self.points)
+        if c.startswith("TRAC? LIST") or c.startswith("SOUR:LIST:FREQ?"):
+            return ",".join(str(f) for f in self._freqs())
+        if c.startswith("TRAC? "):
+            return ",".join(str(v) for v in self._levels())
+        if c.startswith("MMEM:CAT"):
+            return '"FR.EXP",,4096,"FRX.EXP",,2048'
+        if c.startswith("MMEM:STOR:INFO?"):
+            return "4096 bytes sent C:\\UPL\\FR.EXP"
+        if c.startswith("MMEM:CHECK"):
+            return "0"
+        if c.startswith("INST"):
+            return "ANLG"
+        if c.startswith("INP:TYPE?"):
+            return "INT"
+        if c.endswith("?"):
+            return "1.0"
+        return ""
+
+    # --- same surface as UPL ----------------------------------------------
+    def write(self, cmd):
+        self.sent.append(cmd)
+        if cmd.strip().upper().startswith("DISP:TRAC:IND"):
+            self.block = int(cmd.split()[-1])
+        if self.echo:
+            print(f"  ->  {cmd}")
+
+    def query(self, cmd):
+        self.sent.append(cmd)
+        reply = self._reply(cmd)
+        if self.echo:
+            print(f"  ->  {cmd}")
+            print(f"  <-  {reply}")
+        return reply
+
+    def read_block(self, cmd):
+        self.sent.append(cmd)
+        if self.echo:
+            print(f"  ->  {cmd}   (block read)")
+        return b"(dry-run: no file data)\n"
+
+    def set_timeout(self, seconds):
+        if self.echo:
+            print(f"  ..  reply timeout -> {seconds:g}s")
+
+    def close(self):
+        pass
+
+
+def parse_values(reply, what):
+    """Parse a comma-separated ASCII block reply into floats.
+
+    The UPL answers with text like 'No Values' when the trace buffer was never
+    filled -- which is exactly what happens if DISP:TRAC:FEED was not set or the
+    sweep went to the Z axis (SWE2) instead of the X axis (SWE1). Catch that and
+    say so, rather than dying in float()."""
+    reply = reply.strip()
+    if not reply:
+        raise ValueError(f"{what}: empty reply from UPL")
+    parts = [v.strip() for v in reply.split(",") if v.strip() != ""]
+    try:
+        return [float(v) for v in parts]
+    except ValueError:
+        raise ValueError(
+            f"{what}: UPL replied {reply!r} instead of numbers.\n"
+            "  The trace buffer is empty. Usual causes:\n"
+            "    - DISP:TRAC:FEED was never set (the trace has no source feeding it);\n"
+            "    - the sweep used SOUR:FREQ:MODE SWE2 (frequency on the Z axis) "
+            "instead of SWE1 (X axis);\n"
+            "    - no sweep has run yet, or it was aborted.\n"
+            "  The 'nsweep' subcommand sets all of this up for you."
+        )
 
 
 def cmd_probe(upl, args):
@@ -125,8 +269,8 @@ def cmd_sweep(upl, args):
     upl.query("*OPC?") if args.opc else time.sleep(0.5)
 
     npts = int(float(upl.query("TRAC:POIN? TRAC1")))
-    levels = [float(v) for v in upl.query("TRAC? TRAC1").split(",")]
-    freqs = [float(v) for v in upl.query("SOUR:LIST:FREQ?").split(",")]
+    levels = parse_values(upl.query("TRAC? TRAC1"), "TRAC? TRAC1")
+    freqs = parse_values(upl.query("SOUR:LIST:FREQ?"), "SOUR:LIST:FREQ?")
 
     rows = max(len(levels), len(freqs))
     out = open(args.output, "w") if args.output else sys.stdout
@@ -149,7 +293,7 @@ def cmd_autoexport(upl, args):
     import datetime
 
     def grab_trace(sel):
-        return [float(v) for v in upl.query(f"TRAC? {sel}").split(",") if v.strip() != ""]
+        return parse_values(upl.query(f"TRAC? {sel}"), f"TRAC? {sel}")
 
     reps = args.repeat if args.repeat and args.repeat > 0 else 1
     for rep in range(reps):
@@ -162,7 +306,7 @@ def cmd_autoexport(upl, args):
         upl.query("*OPC?") if args.opc else time.sleep(args.settle)
 
         npts = int(float(upl.query("TRAC:POIN? TRAC1")))
-        freqs = [float(v) for v in upl.query("SOUR:LIST:FREQ?").split(",") if v.strip() != ""]
+        freqs = parse_values(upl.query("SOUR:LIST:FREQ?"), "SOUR:LIST:FREQ?")
         lev1 = grab_trace("TRAC1")
         lev2 = grab_trace("TRAC2") if args.both else None
 
@@ -191,6 +335,281 @@ def cmd_autoexport(upl, args):
     return 0
 
 
+FFT_BLOCK = 1024          # TRAC? never returns more than 1024 values (Vol.2 sec 3.15.11.2.1)
+FFT_MAX_BLOCKS = 8        # DISP:TRAC:IND 0..7 for FFT block paging (Vol.2 sec 3.15.11.2.2)
+
+
+def fft_line_count(size, zoom=1, digital=False):
+    """Displayable FFT lines, per Vol.1 sec 2.6.5.12 (p.2.221).
+
+        Zooming OFF, analog : size * 117/256      (8192 -> 3744)
+        Zooming OFF, digital: size * 127/256      (8192 -> 4064)
+        Zooming ON          : size * 117/256 * 2  (8192 -> 7488, the manual's own example)
+
+    The FFT is complex after the zoom shift, which is why you never get size/2.
+    With Zooming ON the real count can be *lower* than this if an eccentric CENTer
+    pushes some lines into negative frequencies -- so treat it as an upper bound
+    and page until a block comes back short."""
+    base = size * (127 if digital else 117) // 256
+    return base * 2 if zoom > 1 else base
+
+
+def read_fft(upl, max_blocks=FFT_MAX_BLOCKS, sel="TRAC1", verbose=False):
+    """Read a complete FFT, paging over the 1024-line block limit.
+
+    THE thing to know about FFT readout on this instrument: `TRAC?` returns at
+    most 1024 values, full stop. An 8k FFT has 3744 lines (analog, unzoomed) or
+    7488 (zoomed), so a single `TRAC?` gives you only the FIRST block -- the
+    bottom ~6 kHz of the spectrum at 48 kHz sampling, silently, with no error.
+    `DISP:TRAC:IND <n>` selects which block the next `TRAC?` returns
+    (Vol.2 sec 3.15.11.2.2, block index 0..7).
+
+    Take the X axis from `TRAC? LIST1` per block rather than computing
+    bin*resolution: it is correct for zoomed FFTs too, where the block does not
+    start at 0 Hz.
+
+    Returns (freqs, levels) concatenated across blocks."""
+    freqs, levels = [], []
+    for blk in range(max_blocks):
+        upl.write(f"DISP:TRAC:IND {blk}")
+        y = parse_values(upl.query(f"TRAC? {sel}"), f"TRAC? {sel} (block {blk})")
+        x = parse_values(upl.query("TRAC? LIST1"), f"TRAC? LIST1 (block {blk})")
+        n = min(len(x), len(y))
+        freqs.extend(x[:n])
+        levels.extend(y[:n])
+        if verbose:
+            span = f"{x[0]:.1f}-{x[-1]:.1f} Hz" if n else "empty"
+            print(f"  block {blk}: {n} lines  {span}", file=sys.stderr)
+        if n < FFT_BLOCK:       # short block => that was the last one
+            break
+    upl.write("DISP:TRAC:IND 0")  # leave the block index where we found it
+    return freqs, levels
+
+
+FEED_CHOICES = {
+    # DISP:TRAC[1|2]:FEED -- Vol.2 sec 3.10.6, p.3.183. The trace records nothing
+    # until one of these is fed to it; this is what TRACe[:DATA] footnote 1 means
+    # by "depending on DISPlay:TRACe:FEED and of SENSe1:FUNCtion".
+    "func1":   "SENSe1:DATA1",   # measurement function (SENS1:FUNC), channel 1
+    "func2":   "SENSe1:DATA2",   # same function, channel 2
+    "inprms1": "SENSe2:DATA1",   # input RMS ch1 (meaningful for THD / THDN)
+    "inprms2": "SENSe2:DATA2",   # input RMS ch2
+    "freq1":   "SENSe3:DATA1",   # frequency meter ch1
+    "freq2":   "SENSe3:DATA2",   # freq / phase / group delay ch2, per SENS3:FUNC
+    "hold":    "HOLD",
+    "off":     "OFF",
+}
+
+
+def cmd_nsweep(upl, args):
+    """Drive the UPL's OWN sweep engine and read the result back over the wire.
+
+    Sequence is the manual's frequency-sweep example (Vol.2 sec 3.15.9.1, p.3.305)
+    plus the block-data rules from sec 3.10.10, cross-checked against R&S's own
+    app-note programs (1ga16_1l IMPEDANC/SOUND, 1GA21 CDTEST, 1GA24 TUNTEST,
+    1GA30 Adctest). Unlike the host-side stepping in dcx_sweep.py, the whole
+    sweep runs inside the instrument -- far fewer round trips.
+
+    NOT YET VERIFIED AGAINST HARDWARE (written 2026-09-23 from the documentation
+    after the earlier live attempt failed on SWE2 + missing FEED). Run with
+    --dry-run first to inspect the sequence."""
+    feed = FEED_CHOICES[args.feed]
+
+    if args.reset:
+        upl.write("*RST;*WAI")
+
+    # ASCii => TRAC? replies are comma-separated text. FORM REAL would return a
+    # 488.2 binary block with no delimiter, which has no EOI to end it on RS232.
+    upl.write("FORM ASC")
+    upl.write(f"SENS1:FUNC '{args.func}'")
+    if args.volt is not None:
+        upl.write(f"SOUR:VOLT {args.volt} V")
+
+    upl.write("DISP:TRAC:OPER CURV")
+    upl.write(f"DISP:TRAC:FEED '{feed}'")
+    if args.both:
+        upl.write("DISP:TRAC2:FEED 'SENSe1:DATA2'")
+    upl.write(f"DISP:TRAC:X:SPAC {'LOG' if args.spacing == 'log' else 'LIN'}")
+
+    # SWE1 = frequency on the X axis. SWE2 puts it on the Z axis, which leaves
+    # TRAC1 empty -- that was the bug in the earlier attempt.
+    upl.write("SOUR:SWE:MODE AUTO;:SOUR:FREQ:MODE SWE1")
+    upl.write(f"SOUR:FREQ:STAR {args.start} HZ")
+    upl.write(f"SOUR:FREQ:STOP {args.stop} HZ")
+    upl.write(f"SOUR:SWE:FREQ:SPAC {'LOG' if args.spacing == 'log' else 'LIN'}")
+    upl.write(f"SOUR:SWE:FREQ:POIN {args.points}")
+    upl.write("DISP:CONF AP")
+
+    err = upl.query("SYST:ERR?")
+    if not err.startswith("0,"):
+        print(f"WARNING: UPL reported an error after configuration: {err}", file=sys.stderr)
+
+    # INIT:CONT OFF;*WAI is itself the single-sweep trigger in every R&S example.
+    # A 40-point sweep took ~17s live, so the reply timeout must be generous.
+    print(f"Sweeping {args.points} points {args.start}-{args.stop} Hz ...", file=sys.stderr)
+    upl.set_timeout(args.sweep_timeout)
+    t0 = time.time()
+    try:
+        upl.write("INIT:CONT OFF;*WAI")
+        upl.query("*OPC?")
+    finally:
+        upl.set_timeout(args.timeout)
+    print(f"  sweep finished in {time.time() - t0:.1f}s", file=sys.stderr)
+
+    npts = int(float(upl.query("TRAC:POIN? TRAC1")))
+    if npts == 0:
+        raise ValueError(
+            "TRAC:POIN? TRAC1 returned 0 -- the trace buffer is empty.\n"
+            "  Check SYST:ERR? and that DISP:TRAC:FEED took effect for this "
+            "measurement function."
+        )
+    levels = parse_values(upl.query("TRAC? TRAC1"), "TRAC? TRAC1")
+    freqs = parse_values(upl.query("TRAC? LIST1"), "TRAC? LIST1")
+    lev2 = parse_values(upl.query("TRAC? TRAC2"), "TRAC? TRAC2") if args.both else None
+
+    if args.restore:
+        # Leaving the generator in sweep mode changes what a plain SOUR:FREQ does
+        # afterwards -- the cleanup gotcha recorded in CLAUDE.md.
+        upl.write("SOUR:FREQ:MODE FIX;:SOUR:SWE:MODE OFF")
+
+    rows = max(len(freqs), len(levels), len(lev2) if lev2 else 0)
+    out = open(args.output, "w") if args.output else sys.stdout
+    try:
+        out.write(f"# R&S UPL native sweep  func={args.func}  feed={feed}  points={npts}\n")
+        out.write("point,frequency_Hz,ch1" + (",ch2" if lev2 else "") + "\n")
+        for i in range(rows):
+            f = freqs[i] if i < len(freqs) else ""
+            a = levels[i] if i < len(levels) else ""
+            line = f"{i+1},{f},{a}"
+            if lev2 is not None:
+                line += f",{lev2[i] if i < len(lev2) else ''}"
+            out.write(line + "\n")
+    finally:
+        if args.output:
+            out.close()
+            print(f"Wrote {rows} points to {args.output}")
+    return 0
+
+
+FFT_SIZES = {"256": "S256", "512": "S512", "1024": "S1K", "2048": "S2K", "4096": "S4K", "8192": "S8K"}
+
+
+def cmd_fft(upl, args):
+    """Run one FFT and read the WHOLE spectrum, paging the 1024-line block limit.
+
+    Replaces the single `TRAC? TRAC1` that silently truncates to the first
+    1024 lines. See read_fft() for the mechanism and CLAUDE.md for the history."""
+    if args.reset:
+        upl.write("*RST;*WAI")
+    upl.write("FORM ASC")
+    upl.write("SENS1:FUNCtion 'FFT'")
+    upl.write(f"CALC:TRAN:FREQ:FFT {FFT_SIZES[args.size]}")
+    upl.write(f"CALC:TRAN:FREQ:WINDow {args.window}")
+    # Over the bus you set the ZOOM FACTOR, never the SPAN -- "contrary to the
+    # manual mode ... SPAN can only be read in but not entered" (Vol.2 p.3.134).
+    if args.center is not None:
+        upl.write(f"CALC:TRAN:FREQ:CENT {args.center} HZ")
+    upl.write(f"CALC:TRAN:FREQ:ZOOM {args.zoom}")
+
+    err = upl.query("SYST:ERR?")
+    if not err.startswith("0,"):
+        print(f"WARNING: UPL reported an error after FFT setup: {err}", file=sys.stderr)
+
+    res = upl.query("CALC:TRAN:FREQ:RES?")
+    span = upl.query("CALC:TRAN:FREQ:SPAN?")
+    start = upl.query("CALC:TRAN:FREQ:STAR?")
+    stop = upl.query("CALC:TRAN:FREQ:STOP?")
+    expect = fft_line_count(int(args.size), args.zoom, digital=args.digital)
+    print(f"FFT {args.size} zoom={args.zoom} res={res} span={span} start={start} stop={stop}",
+          file=sys.stderr)
+    print(f"  expecting up to {expect} lines = {-(-expect // FFT_BLOCK)} block(s) of {FFT_BLOCK}",
+          file=sys.stderr)
+
+    upl.set_timeout(args.fft_timeout)
+    try:
+        upl.write("INIT:CONT OFF;*WAI")
+        upl.query("*OPC?")
+    finally:
+        upl.set_timeout(args.timeout)
+
+    freqs, levels = read_fft(upl, max_blocks=args.max_blocks, verbose=True)
+    if len(freqs) <= FFT_BLOCK and expect > FFT_BLOCK:
+        print(f"WARNING: got {len(freqs)} lines but expected ~{expect}. "
+              "Block paging may not be working on this firmware.", file=sys.stderr)
+
+    out = open(args.output, "w") if args.output else sys.stdout
+    try:
+        out.write(f"# R&S UPL FFT  size={args.size} zoom={args.zoom} window={args.window} "
+                  f"res={res} lines={len(freqs)}\n")
+        out.write("freq_Hz,level\n")
+        for f, v in zip(freqs, levels):
+            out.write(f"{f:.4f},{v}\n")
+    finally:
+        if args.output:
+            out.close()
+            print(f"Wrote {len(freqs)} lines to {args.output}")
+    return 0
+
+
+TRACE_SEL = {"a": "TRACe1", "b": "TRACe2", "ab": "TR1And2"}
+
+
+def cmd_storetrace(upl, args):
+    """Have the UPL write its current trace to a file on its OWN disk.
+
+    Vol.2 sec 3.10.5.1.1 "Loading and Storing Traces and Lists", used verbatim by
+    four R&S app-note programs. This is the "save on the UPL, transfer later"
+    half -- pair it with the SNDFILE / ser_in.py route to get the file to the PC.
+
+    Format note from the manual: EXPort writes a bare text table (.EXP) that any
+    editor or spreadsheet reads, but it carries no header info, so the UPL itself
+    cannot load it back. Use ASCii or BIN if the file has to return to the
+    instrument.
+
+    NOT YET VERIFIED AGAINST HARDWARE (written 2026-09-23 from the documentation)."""
+    fmt = {"exp": "EXPort", "asc": "ASCii", "bin": "BIN"}[args.format]
+    upl.write(f"MMEM:STOR:FORM {fmt}")
+    upl.write(f"MMEM:STOR:TRAC {TRACE_SEL[args.trace]},'{args.remote}'")
+    print(f"Stored trace {args.trace.upper()} as {fmt} -> {args.remote} (on the UPL)")
+
+    if args.xaxis:
+        xname = args.xaxis_name or _sibling(args.remote, "X")
+        upl.write(f"MMEM:STOR:LIST LIST1,'{xname}'")
+        print(f"Stored X-axis list -> {xname} (on the UPL)")
+
+    err = upl.query("SYST:ERR?")
+    print(f"SYST:ERR? -> {err}")
+    if not err.startswith("0,"):
+        print("WARNING: the store did not complete cleanly.", file=sys.stderr)
+        return 1
+
+    if args.verify:
+        import os
+        folder = os.path.dirname(args.remote) or None
+        print("MMEM:CAT? ->", upl.query(f"MMEM:CAT? '{folder}'" if folder else "MMEM:CAT?"))
+
+    print(
+        "\nNext step -- getting it to the PC (App Note 1GA42_0E):\n"
+        "  1. UPL: Display panel -> Info Text -> type the path above\n"
+        f"  2. PC:  python ser_in.py --port COMn out\\{_basename(args.remote)}\n"
+        "  3. UPL: OPTIONS panel -> SNDFILE\n"
+        "  Start the PC listener BEFORE triggering SNDFILE."
+    )
+    return 0
+
+
+def _basename(path):
+    return path.replace("/", "\\").rsplit("\\", 1)[-1]
+
+
+def _sibling(path, suffix):
+    """C:\\UPL\\FR.EXP + 'X' -> C:\\UPL\\FRX.EXP (DOS 8.3: keep it short)."""
+    head, _, tail = path.replace("/", "\\").rpartition("\\")
+    stem, dot, ext = tail.partition(".")
+    stem = (stem[:7] + suffix) if len(stem) >= 8 else stem + suffix
+    return (head + "\\" if head else "") + stem + dot + ext
+
+
 def cmd_catalog(upl, args):
     print(upl.query(f"MMEM:CAT? '{args.path}'" if args.path else "MMEM:CAT?"))
     return 0
@@ -217,12 +636,151 @@ def cmd_raw(upl, args):
     return 0
 
 
+def cmd_seqcheck(upl, args):
+    """Run the new sequences against the dry-run stub and assert the SCPI matches
+    what the manual and the R&S app-note programs document. Pure offline check --
+    catches a regression in the command order or spelling without an instrument."""
+    import argparse as _ap
+    failures = []
+
+    def check(name, sent, required, forbidden=()):
+        joined = "\n".join(sent)
+        for token in required:
+            if token not in joined:
+                failures.append(f"{name}: missing {token!r}")
+        for token in forbidden:
+            if token in joined:
+                failures.append(f"{name}: should not send {token!r}")
+        print(f"  {name}: {len(sent)} commands")
+
+    # --- nsweep ---
+    stub = DryRunUPL(points=6, echo=False)
+    ns = _ap.Namespace(
+        func="RMS", feed="func1", start=20, stop=20000, points=40, spacing="log",
+        volt=None, both=False, reset=True, restore=True, output=None,
+        timeout=10.0, sweep_timeout=120.0,
+    )
+    import io, contextlib
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        cmd_nsweep(stub, ns)
+    check(
+        "nsweep", stub.sent,
+        required=[
+            "FORM ASC",
+            "DISP:TRAC:OPER CURV",
+            "DISP:TRAC:FEED 'SENSe1:DATA1'",
+            "SOUR:SWE:MODE AUTO;:SOUR:FREQ:MODE SWE1",
+            "SOUR:SWE:FREQ:POIN 40",
+            "DISP:CONF AP",
+            "INIT:CONT OFF;*WAI",
+            "TRAC:POIN? TRAC1",
+            "TRAC? TRAC1",
+            "TRAC? LIST1",
+            "SOUR:FREQ:MODE FIX;:SOUR:SWE:MODE OFF",
+        ],
+        forbidden=["SWE2", "FORM REAL"],
+    )
+    # FEED must precede the trigger, or the trace records nothing.
+    if stub.sent.index("DISP:TRAC:FEED 'SENSe1:DATA1'") > stub.sent.index("INIT:CONT OFF;*WAI"):
+        failures.append("nsweep: DISP:TRAC:FEED must be sent before the sweep trigger")
+
+    # --- storetrace ---
+    stub2 = DryRunUPL(echo=False)
+    st = _ap.Namespace(
+        remote="C:\\UPL\\FR.EXP", format="exp", trace="a",
+        xaxis=True, xaxis_name=None, verify=False,
+    )
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        cmd_storetrace(stub2, st)
+    check(
+        "storetrace", stub2.sent,
+        required=[
+            "MMEM:STOR:FORM EXPort",
+            "MMEM:STOR:TRAC TRACe1,'C:\\UPL\\FR.EXP'",
+            "MMEM:STOR:LIST LIST1,'C:\\UPL\\FRX.EXP'",
+        ],
+    )
+    if stub2.sent.index("MMEM:STOR:FORM EXPort") > stub2.sent.index("MMEM:STOR:TRAC TRACe1,'C:\\UPL\\FR.EXP'"):
+        failures.append("storetrace: MMEM:STOR:FORM must be sent before MMEM:STOR:TRAC")
+
+    # --- fft block paging ---
+    stub3 = DryRunUPL(echo=False, fft_lines=fft_line_count(8192))
+    ff = _ap.Namespace(
+        size="8192", zoom=1, center=None, window="BLACkman_harris", digital=False,
+        max_blocks=FFT_MAX_BLOCKS, reset=True, output=None,
+        timeout=10.0, fft_timeout=120.0,
+    )
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+        cmd_fft(stub3, ff)
+    check(
+        "fft", stub3.sent,
+        required=["FORM ASC", "SENS1:FUNCtion 'FFT'", "CALC:TRAN:FREQ:FFT S8K",
+                  "CALC:TRAN:FREQ:ZOOM 1", "INIT:CONT OFF;*WAI",
+                  "DISP:TRAC:IND 0", "DISP:TRAC:IND 1", "DISP:TRAC:IND 2", "DISP:TRAC:IND 3"],
+        forbidden=["CALC:TRAN:FREQ:SPAN "],   # SPAN is query-only over the bus
+    )
+    got = sum(1 for line in buf.getvalue().splitlines() if line and line[0].isdigit())
+    if got != 3744:
+        failures.append(f"fft: read {got} lines, expected 3744 (block paging broken)")
+    else:
+        print(f"  fft: paged {got} lines across 4 blocks (single TRAC? would give 1024)")
+    # A block index must be selected before each read, or every block returns block 0.
+    if "DISP:TRAC:IND 1" in stub3.sent:
+        i_ind, i_trac = stub3.sent.index("DISP:TRAC:IND 1"), None
+        for j in range(i_ind + 1, len(stub3.sent)):
+            if stub3.sent[j].startswith("TRAC? TRAC"):
+                i_trac = j
+                break
+        if i_trac is None:
+            failures.append("fft: no TRAC? read after selecting block 1")
+
+    if fft_line_count(8192) != 3744 or fft_line_count(8192, digital=True) != 4064 \
+            or fft_line_count(8192, zoom=2) != 7488:
+        failures.append("fft_line_count: disagrees with Vol.1 sec 2.6.5.12")
+    else:
+        print("  fft_line_count: 3744 analog / 4064 digital / 7488 zoomed, per Vol.1 2.6.5.12")
+
+    # --- parse_values error path ---
+    for bad in ("No Values", ""):
+        try:
+            parse_values(bad, "test")
+            failures.append(f"parse_values({bad!r}) should have raised")
+        except ValueError:
+            pass
+    print("  parse_values: rejects empty / 'No Values' replies")
+
+    # --- 8.3 sibling naming ---
+    cases = {
+        "C:\\UPL\\FR.EXP": "C:\\UPL\\FRX.EXP",
+        "C:\\UPL\\SWEEPDAT.EXP": "C:\\UPL\\SWEEPDAX.EXP",
+        "FR.EXP": "FRX.EXP",
+    }
+    for src, want in cases.items():
+        got = _sibling(src, "X")
+        if got != want:
+            failures.append(f"_sibling({src!r}) = {got!r}, expected {want!r}")
+    print(f"  _sibling: {len(cases)} DOS 8.3 cases")
+
+    print()
+    if failures:
+        for f in failures:
+            print("FAIL:", f)
+        return 1
+    print("All offline sequence checks passed.")
+    print("Documented sources: Vol.2 sec 3.10.5.1.1, 3.10.6, 3.10.10, 3.15.9.1;")
+    print("R&S app notes 1ga16_1l, 1GA21, 1GA24, 1GA30.")
+    return 0
+
+
 def main():
     p = argparse.ArgumentParser(description="Pull data off an R&S UPL over RS232 (COM2).")
-    p.add_argument("--port", required=True, help="host serial port, e.g. COM4 or /dev/ttyUSB0")
+    p.add_argument("--port", help="host serial port, e.g. COM4 or /dev/ttyUSB0 (not needed with --dry-run)")
     p.add_argument("--baud", type=int, default=115200, help="must match UPL COM2 (default 115200)")
     p.add_argument("--timeout", type=float, default=10.0, help="reply timeout seconds")
     p.add_argument("--opc", action="store_true", help="use *OPC? to wait instead of a fixed delay")
+    p.add_argument("--dry-run", action="store_true",
+                   help="do not open a serial port; print the SCPI that would be sent and use canned replies")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("probe", help="send *IDN? to confirm remote control (UPL-B4) is live")
@@ -241,6 +799,45 @@ def main():
     a.add_argument("--repeat", type=int, default=1, help="number of captures (for logging)")
     a.add_argument("--interval", type=float, default=0.0, help="seconds between repeats")
 
+    n = sub.add_parser("nsweep", help="run the UPL's OWN sweep engine and pull the trace + x-axis to CSV")
+    n.add_argument("--start", type=float, default=20.0, help="sweep start frequency in Hz (default 20)")
+    n.add_argument("--stop", type=float, default=20000.0, help="sweep stop frequency in Hz (default 20000)")
+    n.add_argument("--points", type=int, default=40, help="sweep points, 2..1024 (default 40)")
+    n.add_argument("--spacing", choices=["log", "lin"], default="log", help="sweep spacing (default log)")
+    n.add_argument("--func", default="RMS", help="SENS1:FUNC measurement function, e.g. RMS, THD, THDN (default RMS)")
+    n.add_argument("--feed", choices=sorted(FEED_CHOICES), default="func1",
+                   help="what feeds trace A (default func1 = SENSe1:DATA1, the measured function on ch1)")
+    n.add_argument("--volt", type=float, help="generator level in V, if it should be set")
+    n.add_argument("--both", action="store_true", help="also feed and capture trace B (channel 2)")
+    n.add_argument("--no-reset", dest="reset", action="store_false", help="skip the leading *RST")
+    n.add_argument("--no-restore", dest="restore", action="store_false",
+                   help="leave the generator in sweep mode afterwards (default restores FIX)")
+    n.add_argument("--sweep-timeout", type=float, default=120.0,
+                   help="reply timeout while the sweep runs; 40 points took ~17s live (default 120)")
+    n.add_argument("-o", "--output", help="CSV file (default: stdout)")
+
+    ff = sub.add_parser("fft", help="run an FFT and read the WHOLE spectrum (pages the 1024-line block limit)")
+    ff.add_argument("--size", choices=sorted(FFT_SIZES, key=int), default="8192", help="FFT size (default 8192)")
+    ff.add_argument("--zoom", type=int, default=1, help="zoom factor: 1=off, else 2/4/8/... (default 1)")
+    ff.add_argument("--center", type=float, help="zoom center frequency in Hz (only meaningful with --zoom > 1)")
+    ff.add_argument("--window", default="BLACkman_harris", help="CALC:TRAN:FREQ:WINDow (default BLACkman_harris)")
+    ff.add_argument("--digital", action="store_true", help="digital analyzer: line count is size*127/256, not 117/256")
+    ff.add_argument("--max-blocks", type=int, default=FFT_MAX_BLOCKS, help="block-index ceiling (default 8)")
+    ff.add_argument("--no-reset", dest="reset", action="store_false", help="skip the leading *RST")
+    ff.add_argument("--fft-timeout", type=float, default=120.0, help="reply timeout while the FFT runs (default 120)")
+    ff.add_argument("-o", "--output", help="CSV file (default: stdout)")
+
+    st = sub.add_parser("storetrace", help="tell the UPL to write its current trace to a file on its own disk")
+    st.add_argument("remote", help="path on the UPL, e.g. C:\\UPL\\FR.EXP")
+    st.add_argument("--format", choices=["exp", "asc", "bin"], default="exp",
+                    help="exp = plain text table for the PC (default); asc/bin can be reloaded by the UPL")
+    st.add_argument("--trace", choices=["a", "b", "ab"], default="a", help="which trace buffer (default a)")
+    st.add_argument("--xaxis", action="store_true", help="also store the X-axis list (MMEM:STOR:LIST LIST1)")
+    st.add_argument("--xaxis-name", help="explicit path for the X-axis file (default: derived from remote)")
+    st.add_argument("--verify", action="store_true", help="MMEM:CAT? the directory afterwards")
+
+    sub.add_parser("seqcheck", help="offline: assert the nsweep/storetrace SCPI matches the documented sequences")
+
     c = sub.add_parser("catalog", help="list files on the UPL (MMEM:CAT?)")
     c.add_argument("path", nargs="?", help="optional directory, e.g. C:\\UPL")
 
@@ -252,12 +849,30 @@ def main():
     rw.add_argument("command")
 
     args = p.parse_args()
-    upl = UPL(args.port, args.baud, args.timeout)
+
+    if args.cmd == "seqcheck":
+        return cmd_seqcheck(None, args)
+
+    if args.dry_run:
+        print("--- DRY RUN: no serial port opened ---")
+        # For `fft`, model a real spectrum of the requested size/zoom (8192
+        # unzoomed analog = 3744 lines) so the block paging is actually exercised.
+        if args.cmd == "fft":
+            upl = DryRunUPL(fft_lines=fft_line_count(int(args.size), args.zoom, args.digital))
+        else:
+            upl = DryRunUPL()
+    else:
+        if not args.port:
+            p.error("--port is required (or use --dry-run)")
+        upl = UPL(args.port, args.baud, args.timeout)
     try:
         return {
             "probe": cmd_probe,
             "read": cmd_read,
             "sweep": cmd_sweep,
+            "nsweep": cmd_nsweep,
+            "fft": cmd_fft,
+            "storetrace": cmd_storetrace,
             "autoexport": cmd_autoexport,
             "catalog": cmd_catalog,
             "getfile": cmd_getfile,

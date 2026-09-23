@@ -3,16 +3,33 @@
 m51_jitter_fft.py (v2) - sideband/jitter check on the M51's analog output,
 using the UPL's FFT function.
 
-IMPORTANT, hard-won: only CALC:TRAN:FREQ:ZOOM 1 (unzoomed) gives a trustworthy
-TRAC1 readout on this firmware -- validated live against 4 known tones (1k,
-2k, 3k, 5.5kHz), all landing within 1 bin (5.859375 Hz, for FFT size S8K) of
-truth, with correct amplitude (~2.8-3V vs ~2e-5 silence floor). The zoomed/
-centered mode (ZOOM>1 + CENTer) was tried and found unreliable (peak stuck at
-silence-floor level, no consistent axis) -- not used here.
-Frequency axis for TRAC1 in this (zoom=1) mode: freq = bin_index * resolution,
-starting at 0 Hz (NOT the CALC:TRAN:FREQ:STARt?/STOP? values, which describe
-a wider theoretical span than what TRAC1 actually returns -- another firmware
-quirk). Usable range at S8K/zoom=1 @ 1024 returned points: 0 - ~6000 Hz.
+RESOLVED 2026-09-23 -- the "FFT zoom quirk" was not a firmware quirk.
+
+What was previously recorded here: only ZOOM 1 gave a trustworthy readout;
+ZOOM>1 + CENTer left the peak "stuck at silence-floor level, no consistent
+axis"; CALC:TRAN:FREQ:STARt?/STOP? described "a wider theoretical span than
+what TRAC1 actually returns"; usable range was "0 - ~6000 Hz".
+
+All three symptoms are one cause: **TRAC? returns at most 1024 values**
+(Vol.2 sec 3.15.11.2.1). An 8k FFT has 3744 lines unzoomed-analog and 7488
+zoomed (Vol.1 sec 2.6.5.12: size*117/256, x2 when zooming). A single TRAC?
+therefore hands back only the FIRST block -- silently, no error:
+  - unzoomed: block 0 = lines 0..1023 = 0 .. 1024*5.859375 = 5999.9 Hz.
+    That IS the "0 - ~6000 Hz" limit, exactly.
+  - zoomed:   block 0 is the bottom eighth of the zoom span, nowhere near
+    CENTer -- so the tone is in a middle block and block 0 shows noise floor.
+    That IS "peak stuck at silence-floor level".
+  - STARt?/STOP? were right all along: they describe the whole FFT, while
+    TRAC? was returning one block of it.
+
+Fix: select the block with DISP:TRAC:IND <0..7> before each read and
+concatenate (Vol.2 sec 3.15.11.2.2, which has R&S's own 8-block loop), and
+take the X axis from TRAC? LIST1 per block instead of computing bin*resolution
+-- LIST1 is correct for zoomed FFTs too, where the block does not start at 0 Hz.
+upl_capture.read_fft() does this; this script now uses it, so the spectrum
+covers the full 0 - 21.9 kHz and --zoom is usable.
+
+NOT YET RE-RUN AGAINST THE INSTRUMENT since the change.
 """
 import argparse
 import csv
@@ -24,7 +41,7 @@ import sounddevice as sd
 sys.path.insert(0, "..")
 sys.path.insert(0, ".")
 from nad_m51 import M51
-from upl_capture import UPL
+from upl_capture import UPL, read_fft, fft_line_count
 
 
 def main():
@@ -35,8 +52,14 @@ def main():
     p.add_argument("--fs", type=int, required=True)
     p.add_argument("--freq", type=float, default=3000.0)
     p.add_argument("--level-dbfs", type=float, default=-1.0)
+    p.add_argument("--zoom", type=int, default=1,
+                   help="FFT zoom factor: 1 = off. >1 needs --center; now usable thanks to block paging")
+    p.add_argument("--center", type=float,
+                   help="zoom center frequency in Hz (defaults to --freq when --zoom > 1)")
     p.add_argument("-o", "--output", required=True)
     args = p.parse_args()
+    if args.zoom > 1 and args.center is None:
+        args.center = args.freq
 
     dut = M51(args.m51_port)
     orig_volume = dut.get_volume_db()
@@ -50,10 +73,15 @@ def main():
     upl.write("SENS1:FUNCtion 'FFT'")
     upl.write("CALC:TRAN:FREQ:WINDow BLACkman_harris")
     upl.write("CALC:TRAN:FREQ:FFT S8K")
-    upl.write("CALC:TRAN:FREQ:ZOOM 1")
+    if args.center is not None:
+        upl.write(f"CALC:TRAN:FREQ:CENT {args.center} HZ")
+    # Over the bus you set the zoom FACTOR, not the SPAN (Vol.2 p.3.134).
+    upl.write(f"CALC:TRAN:FREQ:ZOOM {args.zoom}")
     upl.write("FORM ASCii")
     res = float(upl.query("CALC:TRAN:FREQ:RESolution?").split()[0])
-    print(f"FFT resolution: {res:.4f} Hz/bin")
+    expect = fft_line_count(8192, args.zoom)
+    print(f"FFT resolution: {res:.4f} Hz/bin, expecting up to {expect} lines "
+          f"({-(-expect // 1024)} block(s))")
 
     t = np.arange(int(args.fs * 1.0)) / args.fs
     amp = 10 ** (args.level_dbfs / 20.0)
@@ -68,15 +96,18 @@ def main():
         upl.write("INIT:CONT OFF")
         upl.write("INIT")
         upl.query("*OPC?")  # genuinely blocks until the FFT acquisition is done
-        raw = upl.query("TRAC? TRAC1")
-        trace = np.array([float(x) for x in raw.split(",") if x.strip()])
+        # Pages DISP:TRAC:IND 0..7 -- a bare TRAC? would truncate at 1024 lines.
+        f_list, y_list = read_fft(upl, verbose=True)
+        freqs = np.array(f_list)
+        trace = np.array(y_list)
     finally:
         sd.stop()
         dut.set_volume_db(orig_volume)
         dut.close()
         upl.close()
 
-    freqs = np.arange(len(trace)) * res
+    # Frequency axis comes from TRAC? LIST1 per block, not bin*res -- correct for
+    # zoomed FFTs too, where a block does not start at 0 Hz.
     with open(args.output, "w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(["freq_Hz", "level_V"])

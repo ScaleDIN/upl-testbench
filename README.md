@@ -48,6 +48,15 @@ python upl_capture.py --port COM7 probe
 python upl_capture.py --port COM7 raw "SYST:ERR?"
 python upl_capture.py --port COM7 autoexport -o sweep.csv
 
+# UPL: run the instrument's OWN sweep engine (NOT yet hardware-verified -- see below)
+python upl_capture.py --port COM7 nsweep --start 20 --stop 20000 --points 40 -o fr.csv
+
+# UPL: have the instrument save its current trace to its own disk, for SNDFILE transfer
+python upl_capture.py --port COM7 storetrace "C:\UPL\FR.EXP" --xaxis
+
+# UPL: full FFT spectrum, paging past the 1024-line limit (NOT yet hardware-verified)
+python upl_capture.py --port COM7 fft --size 8192 -o fft.csv
+
 # DCX2496: enable remote, nudge a gain, set a crossover point
 python dcx2496.py --port COM2 enable
 python dcx2496.py --port COM2 gain out1 -6.0
@@ -60,6 +69,64 @@ python nad_m51.py --port COM2 source
 ```
 
 `upl_capture.py --help`, `dcx2496.py --help`, `nad_m51.py --help` list every subcommand.
+
+### Working offline (`--dry-run`)
+
+Every `upl_capture.py` subcommand takes `--dry-run`, which skips the serial port entirely, prints
+the exact SCPI it would send, and answers queries with canned values. No instrument and no `--port`
+needed — use it to review a sequence before pointing it at real hardware:
+
+```bash
+python upl_capture.py --dry-run nsweep --start 20 --stop 20000 --points 40
+```
+
+`python upl_capture.py seqcheck` is the offline regression test: it runs `nsweep` and `storetrace`
+through that stub and asserts the emitted SCPI still matches what the manual and the R&S app-note
+programs document (right commands, right order, `SWE1` not `SWE2`, `FORM ASC` not `FORM REAL`).
+
+### UPL native sweep vs. host-side stepping
+
+`nsweep` hands the whole sweep to the UPL's internal sweep engine (`SOUR:SWE:MODE AUTO` +
+`SOUR:FREQ:MODE SWE1`, one `INIT:CONT OFF;*WAI`, then `TRAC? TRAC1` / `TRAC? LIST1`) instead of
+stepping `SOUR:FREQ` from the host in a loop the way `dcx_sweep.py` does. Far fewer round trips —
+a 40-point sweep runs in ~17 s inside the instrument.
+
+**`nsweep` and `storetrace` are written from the documentation and have not yet been run against
+the instrument.** An earlier live attempt at the native sweep failed (`TRAC:POIN? TRAC1` → `0`)
+because it used `SWE2` (which puts frequency on the *Z* axis, leaving trace A empty) and never set
+`DISP:TRAC:FEED` (without a feed the trace buffer has no source and records nothing). Both are
+fixed here, but treat the first real run as a bring-up — `CLAUDE.md`'s "UPL native sweep engine"
+section has the checklist and the full documentary basis. If a trace comes back empty, the tool now
+says so and names the likely cause instead of crashing in `float()`.
+
+### FFT readout: always page the blocks
+
+`TRAC?` returns **at most 1024 values**, but an 8k FFT has 3744 lines (analog, unzoomed) or 7488
+(zoomed). A single `TRAC?` therefore gives you only the first block — the bottom ~6 kHz at 48 kHz
+sampling — silently, with no error. `DISP:TRAC:IND <0..7>` selects the block; `read_fft()` in
+`upl_capture.py` pages them and concatenates, taking the X axis from `TRAC? LIST1` per block.
+
+```bash
+python upl_capture.py --dry-run fft --size 8192        # see the paging, offline
+python upl_capture.py --port COM7 fft --size 8192 -o fft.csv
+python upl_capture.py --port COM7 fft --zoom 8 --center 10000 -o zoomed.csv
+```
+
+This is what the "FFT zoom quirk" in `m51_jitter_fft.py` turned out to be — zoom was never broken,
+the readout was returning the wrong eighth of it. `CLAUDE.md`'s "FFT zoom quirk RESOLVED" section
+has the full arithmetic. Note that over the bus you set the zoom **factor**, never the SPAN
+(`CALC:TRAN:FREQ:SPAN?` is query-only).
+
+### Getting a stored file off the UPL
+
+`storetrace` is the "save on the instrument" half — it writes the trace (and optionally the X-axis
+list) to a file on the UPL's own disk via `MMEM:STOR:TRAC` / `MMEM:STOR:LIST`. Formats: `exp` (bare
+text table, best for the PC, but the UPL can't read it back), `asc`, `bin`. Moving that file to the
+PC is a separate step — the SNDFILE / `ser_in.py` route described under "Data-egress tools" below.
+`storetrace` prints the exact three steps when it finishes.
+
+For most purposes `autoexport` or `nsweep` is simpler: both pull the numbers straight over the wire
+with no file created on the UPL at all.
 
 ## UPL self-test
 

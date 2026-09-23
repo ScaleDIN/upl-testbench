@@ -178,15 +178,27 @@ option tokens, which is now identified above — previously flagged as unknown.)
 - Unrecognized *query* names cause a read timeout (no reply); unrecognized *set* commands just queue an
   error (safe). Check/drain with `SYST:ERR?` (FIFO, one entry per query; `0,"No error"` = empty).
 - Trace: `TRAC:POIN? TRAC1`, `TRAC? TRAC1` (comma‑separated), x‑axis `SOUR:LIST:FREQ?`
-- Source cfg (EXAM7): `SOUR:SWE:MODE AUTO`, `SOUR:FREQ:MODE SWE2`, `SOUR:FREQ:STAR/STOP`, `INP:TYPE`,
+- Source cfg (EXAM7): `SOUR:SWE:MODE AUTO`, `SOUR:FREQ:MODE SWE2` (**note: for a normal X-axis
+  frequency sweep you want `SWE1` — see "UPL native sweep engine" below**), `SOUR:FREQ:STAR/STOP`, `INP:TYPE`,
   `SENS:FILT:AWE`, `DISP:CONF`, `CALC:EQU:INV`, `SOUR:VOLT:EQU:STAT`
 - File mgmt (MMEM children in EXE): `STORe`, `DATA`(`MMEM:DATA? 'file'`), `CATalog`, `DELete`,
   `CDIRectory`, `COPY`, `CHECk` (checksum, matched by `UPMD5.EXE`)
 - Data format node: `FORMat` = `BIN | ASCii | EXPort`. Trace‑list store format REAL/ASCII/**EXPORT**;
   EXPORT = readable numbers in display units, Excel‑ready (no header/footer).
-- **STILL UNCONFIRMED:** the exact SCPI to make the UPL *store a trace list to a file remotely*.
-  `MMEM:STOR:LIST <type>,'file'` is confirmed for lists (equalization). To be probed live against
-  the instrument (try candidates, check `SYST:ERR?` = `0,"No error"` + `MMEM:CAT?` for a new file).
+- **RESOLVED 2026‑09‑23 — store a trace to a file remotely** (was "STILL UNCONFIRMED"). Documented in
+  Vol.2 §3.10.5.1.1 *Loading and Storing Traces and Lists*, and used verbatim by four independent R&S
+  app-note programs (`IMPEDANC.ASC`/`SOUND.ASC` in 1ga16_1l, `CDTEST.BAS` 1GA21, `TUNTEST.BAS` 1GA24,
+  `Adctest.bas` 1GA30):
+  ```
+  MMEM:STOR:FORM BIN | ASCii | EXPort      ; EXPort = plain text table, .EXP ext, no extra info
+  MMEM:STOR:TRAC TRACe1,'C:\UPL\SWEEP.EXP' ; trace A buffer   (app notes also use short form TRAC / TR1A)
+  MMEM:STOR:TRAC TRACe2,'...'              ; trace B buffer
+  MMEM:STOR:TRAC TR1And2,'...'             ; both traces
+  MMEM:STOR:LIST LIST1,'C:\UPL\SWEEPX.EXP' ; X-axis list   (LIST2 = Z axis, DWELl = dwell times)
+  MMEM:STOR:LIST ERRors|LIMUpper|LIMLower,'...'   ; limit report / tolerance curves
+  ```
+  Caveat from the manual: EXPort files carry no header info, so the **UPL cannot read them back** —
+  use ASCii/BIN if the file has to be re-loaded into the instrument, EXPort if it's going to the PC.
 - **CORRECTION (from App Note 1GA42_0E, 2026‑09‑22):** `upl_capture.py`'s `getfile` (built on
   `MMEM:DATA? 'file'` as a 488.2 block read) was written **by symmetry** with the confirmed
   PC→UPL upload direction (`RS232_BT.BAS`) and **was never actually tested against real hardware**.
@@ -231,6 +243,23 @@ also our SCPI control channel may hit port contention (the UPL's RS232 SCPI hand
 `SNDFILE.BAS`'s own `OPEN "com2:..."` both wanting COM2). Untested. The **manual trigger path**
 (front‑panel Info Text + OPTIONS→SNDFILE, PC listener via `ser_in.py`) sidesteps this entirely
 and is the safer one to try first.
+
+**Confirmed 2026‑09‑23 by decompressing `DISK2/USER.LZH`** with `scratchpad/lzh_extract.py` (a
+pure-Python `-lh5-` decoder written because `LHA.EXE` is 16-bit DOS and there's no `lha`/`7z` here;
+`python scratchpad/lzh_extract.py DISK2/USER.LZH` lists, `... USER.LZH SNDFILE.BAS` extracts).
+`SNDFILE.BAS` contains the literal line:
+```
+OPEN "com2:115000,n,8,1,10000,10,v,m" ...
+```
+so the port really is hard-coded, and the port contention above is real, not hypothetical — the
+macro opens COM2 itself while SCPI is also using COM2. 1GA42_0E says as much: *"The COM2 interface
+from the UPL is used by default for data transfer. To change the interface used, edit the
+SNDFILE.BAS (Basic) program."* So the fully-remote, RS232-only path is possible if SNDFILE.BAS is
+edited to `com1:` on the instrument and a **second** serial cable is run from UPL COM1 to the PC.
+`DRV_INST.BAS` (also decompressed) confirms this is viable: its own header reads *"Installation of
+device driver comx.sys for **COM1 and COM2**"* — it appends `devicehigh=c:\upl\driver\comx.sys` to
+`c:\config.sys` and reboots, and the driver covers both ports. Otherwise: manual trigger.
+`USER.LZH` also holds `SELFTEST.BAS`, `DRV_INST.BAS`, `SER_IN.EXE`, `FLAT_GEN.BAS`, `IMPEDANC.BAS`.
 
 ## Tools in this folder
 
@@ -454,7 +483,7 @@ as its first frame on every call**, so this trap can't recur. Step-of-5 per-band
 **The DCX2496 protocol/module has no more unverified pieces** — gain, mute, crossover (HP/LP
 type+freq), and EQ bands are all live-confirmed.
 
-### UPL native sweep engine — tried, works partially, parked
+### UPL native sweep engine — parked 2026‑09‑23, root cause identified same day (see end of section)
 
 User asked whether the sweep scripts use the UPL's own hardware sweep (`SOUR:SWE:MODE AUTO;
 SOUR:FREQ:MODE SWE2; SOUR:FREQ:STAR/STOP; INIT;*WAI; TRAC? TRAC1`, per `EXAM2.BAS`/`EXAM7.BAS`) or
@@ -472,6 +501,145 @@ just step `SOUR:FREQ` manually in a host-side loop. **Answer: manual stepping** 
   a specific `DISP:MODE`, or the trace needs to be explicitly told which function to record) —
   **not resolved, parked**. Manual stepping remains the proven, working default; worth revisiting
   if per-sweep round-trip time becomes a real bottleneck later.
+
+**ROOT CAUSE FOUND 2026‑09‑23 (documentary, not yet re-tested live)** — from Vol.2 §3.10.10 /
+§3.10.6 plus R&S's own app-note programs. Two concrete errors in the attempt above:
+
+1. **`SOUR:FREQ:MODE SWE2` was the wrong sweep.** Vol.2 p.3.55: `SWEep1` = "frequency as **X axis**",
+   `SWEep2` = "frequency as **Z axis**" (the nested/outer sweep dimension). With SWE2 the frequency
+   went to the Z list, so the X/Y1 trace was never filled — hence `TRAC:POIN? TRAC1` → `0`. Every
+   R&S example uses `SOUR:SWE:MODE AUTO;:SOUR:FREQ:MODE SWE1`.
+2. **`DISP:TRAC:FEED` was never set.** Vol.2 §3.10.10 footnote 1 on `TRACe[:DATA] TRACe1` states the
+   block data depends on `DISPlay:TRACe:FEED` *and* `SENSe1:FUNCtion`. The trace buffer is a display
+   object: nothing is recorded into it until a source is fed to it.
+   `DISP:TRAC[1|2]:FEED 'SENSe1:DATA1'|'SENSe1:DATA2'|'SENSe2:DATA1'|'SENSe2:DATA2'|'SENSe3:DATA1'|
+   'SENSe3:DATA2'|'HOLD'|'FILE'|'DFILe'|'OFF'` — SENS1 = the function set by `SENS1:FUNC` (DATA1=CH1,
+   DATA2=CH2), SENS2 = input RMS (for THD/THDN), SENS3 = frequency / phase / group delay.
+
+Two lesser points from the same sources:
+- `INIT:CONT OFF;*WAI` is itself the **single-sweep trigger** in R&S's examples, not just a mode
+  switch; `INIT:CONT ON` = continuous. Plain `INIT;*WAI` also appears (Adctest.bas), so both work.
+- X axis: `TRAC? LIST1` is the documented read (`LIST2` = Z axis). `SOUR:LIST:FREQ?` also returned
+  the right axis in our live test; either is fine.
+
+Working sequence per the manual's own frequency-sweep example (Vol.2 §3.15.9.1, p.3.305) plus the
+block-data rules, to try next time:
+```
+FORM ASC                                   ; block data as comma-separated ASCII (power-on default)
+*RST;*WAI
+SENS1:FUNC 'RMS'                           ; whatever is being swept
+DISP:TRAC:OPER CURV                        ; curve-plot display mode
+DISP:TRAC:FEED 'SENS1:DATA1'               ; <-- the piece that was missing
+DISP:TRAC:X:SPAC LOG
+SOUR:SWE:MODE AUTO;:SOUR:FREQ:MODE SWE1    ; <-- SWE1, not SWE2
+SOUR:FREQ:STAR 20 HZ; :SOUR:FREQ:STOP 20000 HZ
+SOUR:SWE:FREQ:SPAC LOG;POIN 40
+DISP:CONF AP                               ; analyzer panel + graphic window
+INIT:CONT OFF;*WAI                         ; single sweep, blocks to completion (LONG timeout, 90s+)
+TRAC:POIN? TRAC1                           ; point count
+TRAC? TRAC1                                ; Y values (trace A)
+TRAC? LIST1                                ; X values
+```
+**`FORM ASC` matters on RS232.** Vol.2 §3.5.4/§3.17.6: `FORM REAL` makes `TRAC?` reply a binary
+488.2 block with *no delimiter* — over RS232 there is no EOI to end it, so the receiver must count
+bytes from the `#<n><len>` header, and any 0x0A in the payload will break an LF-framed reader.
+`FORMat[:DATA]` is not stored in the setup and resets to ASCII on power-up.
+
+**IMPLEMENTED 2026‑09‑23 as `upl_capture.py nsweep` and `upl_capture.py storetrace`** — both written
+from the documentation, **neither yet run against the instrument.** Supporting offline machinery:
+- `--dry-run` on every subcommand → `DryRunUPL` stub, no serial port, prints the SCPI, canned replies.
+- `upl_capture.py seqcheck` → asserts the emitted sequences match the documented ones (presence,
+  ordering of FEED-before-trigger and STOR:FORM-before-STOR:TRAC, no `SWE2`, no `FORM REAL`).
+- `parse_values()` → turns the `"No Values"` / empty-trace reply into a diagnostic naming the three
+  likely causes instead of an opaque `float()` crash. Also now used by `sweep` and `autoexport`.
+
+### FFT "zoom quirk" RESOLVED 2026‑09‑23 — it was the 1024-line block limit all along
+
+`scratchpad/m51_jitter_fft.py` carried a hard-won note that only `CALC:TRAN:FREQ:ZOOM 1` gave a
+trustworthy readout; that `ZOOM>1 + CENTer` left the peak "stuck at silence-floor level, no
+consistent axis"; that `CALC:TRAN:FREQ:STARt?/STOP?` reported "a wider theoretical span than what
+TRAC1 actually returns"; and that the usable range was "0 – ~6000 Hz". **All three symptoms are one
+cause, and it is documented, not a firmware bug.**
+
+**`TRAC?` returns at most 1024 values. Full stop.** (Vol.2 §3.15.11.2.1: *"TRAC? TRAC permits 1024
+values to be read"*.) The FFT has far more lines than that — Vol.1 §2.6.5.12 p.2.221:
+```
+Zooming OFF, analog : size * 117/256        8192 -> 3744 lines
+Zooming OFF, digital: size * 127/256        8192 -> 4064 lines
+Zooming ON          : size * 117/256 * 2    8192 -> 7488 lines
+```
+(the FFT is complex after the zoom shift, which is why you never get size/2). So a single `TRAC?`
+returns only the **first block**, silently, with no error:
+- **Unzoomed:** block 0 = lines 0…1023 = 0 … 1024 × 5.859375 = **5999.9 Hz**. That is precisely the
+  observed "0 – ~6000 Hz" ceiling. The remaining 3 blocks (out of 4) were never read.
+- **Zoomed:** block 0 is the bottom eighth of the zoom span, nowhere near `CENTer` — the tone sits
+  in a middle block, so block 0 is pure noise floor. That is precisely "peak stuck at silence-floor
+  level". Zoom was never broken; we were reading the wrong eighth of it.
+- **`STARt?`/`STOP?` were correct all along.** They describe the whole FFT; `TRAC?` was handing back
+  one block of it. Not a quirk — the two were answering different questions.
+
+Sanity check: 3744 × 5.859375 = 21937.5 Hz = the 21.938 kHz upper limit in Vol.1 Table 2-31. And
+the manual's own worked example (Vol.2 §3.15.11.2.2) reads *"the 7488 lines of a 8k-zoom FFT with 8
+blocks each (7 × 1024 and 1 × 320)"* — the same arithmetic.
+
+**Fix:** `DISP:TRAC:IND <n>` selects which block the next `TRAC?` returns (index 0…7 for FFT blocks;
+the same command selects trace index 0…17 when several traces are displayed). R&S's own loop:
+```
+FOR Blkidx=0 TO 7
+  IEC OUT 20,"DISP:TRAC:IND"+STR$(Blkidx)
+  IEC OUT 20,"TRAC? TRAC"      : ' Y values for this block
+  IEC OUT 20,"TRAC? LIST1"     : ' X values for this block
+NEXT Blkidx
+```
+Take the X axis from `TRAC? LIST1` **per block** rather than computing `bin × resolution` — LIST1 is
+correct for zoomed FFTs too, where a block does not start at 0 Hz.
+
+Two related facts worth keeping:
+- **Over the bus you set the zoom FACTOR, never the SPAN** (Vol.2 p.3.134): *"Contrary to the manual
+  mode, the zoom factor instead of the SPAN is entered … SPAN can only be read in but not entered"*.
+  `CALC:TRAN:FREQ:SPAN?` is query-only. Zoom factors: 1,2,4,…,128 for A22/D48; only 1,2,4,8,16 for
+  ANLG 110 kHz.
+- With Zooming ON the real line count can be **lower** than the formula — an eccentric `CENTer` can
+  push some lines into negative frequencies (Vol.1 §2.6.5.12 note). So treat the formula as an upper
+  bound and page until a block comes back short.
+- Noise-floor thinning, if the full spectrum is too much data: `DISP:TRAC:OPER FFTErrors` +
+  `CALC:LIM:UPP:VAL 0.1V` makes `TRAC?` return only lines above the limit (Vol.2 §3.15.11.2.3).
+
+**Implemented** in `upl_capture.py` as `read_fft()` / `fft_line_count()` and an `fft` subcommand;
+`m51_jitter_fft.py` now uses `read_fft()` and gained `--zoom` / `--center`. `seqcheck` asserts the
+paging emits `DISP:TRAC:IND 0..3` and recovers all 3744 lines from the stub instead of 1024.
+**Not yet re-run against the instrument.**
+
+### Bring-up checklist for the next live session (nsweep / storetrace)
+
+Do these in order; each step isolates one unverified assumption.
+
+1. `python upl_capture.py seqcheck` — offline, should pass before anything is plugged in.
+2. `python upl_capture.py --port COMn probe` — confirm the link (`ROHDE & SCHWARZ, UPL, 3.06, …`).
+3. **Loopback first, no DUT:** `raw "*RST"`, then `raw "INP:TYPE GEN2"` (internal generator →
+   analyzer, confirmed working 2026‑09‑22). A sweep here has a known-good answer: flat.
+4. `python upl_capture.py --port COMn nsweep --points 10 --volt 1.0 -o /tmp/fr.csv`
+   — small point count first, so a stall costs seconds not minutes. Expect ~flat ≈1.0 V.
+   - If `TRAC:POIN? TRAC1` → `0`: the FEED hypothesis is wrong or incomplete. Probe
+     `DISP:TRAC:FEED?` and `DISP:TRAC:OPER?` to see what actually stuck, and check `SYST:ERR?`
+     immediately after each config command to find which one was rejected.
+   - If the sweep times out: raise `--sweep-timeout`; 40 points took ~17 s, so a slow function
+     (THDN with long averaging) could take minutes.
+5. Only then scale up: `--points 40`, a real DUT, `--both`.
+6. `storetrace` second, since it depends on a populated trace:
+   `nsweep` → `storetrace "C:\UPL\FR.EXP" --xaxis --verify` → check `MMEM:CAT?` shows both files
+   with non-zero sizes. If `MMEM:STOR:TRAC` errors, try the app-note short forms (`TRAC`, `TR1A`)
+   which is what R&S's own programs actually send, rather than the manual's `TRACe1`/`TR1And2`.
+7. Then the transfer half: `ser_in.py` listening on the PC, Info Text + OPTIONS→SNDFILE on the UPL.
+   Compare the received byte count against the `MMEM:STOR:INFO?` reply.
+8. FFT block paging: `upl_capture.py --port COMn fft --size 8192 -o /tmp/fft.csv`. Expect **3744**
+   lines spanning 0–21.9 kHz across 4 blocks, not 1024 lines stopping at 6 kHz. Then re-run
+   `m51_jitter_fft.py` and confirm a tone above 6 kHz (e.g. `--freq 10000`) now appears at all —
+   under the old single-`TRAC?` readout it could not have. Then try `--zoom 8 --center 10000`.
+
+**Remember the cleanup gotcha** — `nsweep` sends `SOUR:FREQ:MODE FIX;:SOUR:SWE:MODE OFF` at the end
+by default (`--no-restore` to skip). Without it, later plain `SOUR:FREQ <f> HZ` commands silently
+misbehave, which would corrupt any subsequent `dcx_sweep.py` host-stepped run.
 - **Cleanup gotcha:** switching to `SOUR:FREQ:MODE SWE2` changes what plain `SOUR:FREQ <f> HZ`
   commands do — **must explicitly send `SOUR:FREQ:MODE FIX` (and `SOUR:SWE:MODE OFF`) to return
   to normal fixed-frequency generator behavior** before resuming manual-step sweeps, or they'll
@@ -691,6 +859,24 @@ Folder: `Application Notes/` (one dir up from this project, alongside the manual
 bundled DOS example programs. Most PDFs are usage/install docs for their bundled compiled `.exe`
 programs (source not printed in the PDF), so SCPI yield from text-grepping them was modest —
 cataloged here by topic so they're easy to pull up again if a specific need matches:
+
+**CORRECTION 2026‑09‑23 — the app-note `.exe` files are self-extracting ZIPs, and they contain the
+full BASIC source.** `unzip` opens them directly (the ones that don't are plain DOS binaries):
+```
+unzip -o "Application Notes/1ga16_1l_.../1ga16_1l.exe" -d out/     # SPEAKER/SOUND/IMPEDANC/PHASE/THD .BAS + .ASC
+unzip -o "Application Notes/1GA21_1E_.../1GA21_1E.exe" -d out/     # CDPlayer/CDTEST.BAS + 12 .SAC setups
+unzip -o "Application Notes/1GA24_1E_.../1GA24_1E.exe" -d out/     # Tuner/TUNTEST.BAS, SETUP.BAS + .SAC
+unzip -o "Application Notes/1GA30_0E_.../1GA30_0E.exe" -d out/     # Adctest.bas + Ad_*.sac
+unzip -o "Application Notes/1GA33_1L_.../1ga33_1l.exe" -d out/     # LIMIT.BAS
+```
+`.ASC` = plain-text BASIC listing; `.BAS` = tokenized (still ~90% readable — map non-printable
+bytes to newlines in Python to dump the string literals). This is by far the richest confirmed-SCPI
+source in the whole folder — **richer than the PDFs** — because it's working code R&S shipped.
+It's what resolved `MMEM:STOR:TRAC`, `DISP:TRAC:FEED` and the SWE1/SWE2 question above.
+`1ga16_1l.exe` (loudspeaker) is the most useful single file: complete sweep setup, trace readout,
+trace-to-file store, limit checking, cursor readout, reference curves.
+Two other archives nest further: `1ga36_1l.exe` → `MAKEDISK.LZH` (+ `LHA.EXE`), and
+`FM Tuner Test Program/TUNER.LZH` — both LZH, same format as `DISK2/*.LZH`.
 
 - **1GA42_0E** — UPL→PC file transfer via RS232. **Fully digested above** (SNDFILE/SER_IN/ser_in.py).
 - **1GA36_1L** — Collection of ready-made `.SAC` setup files, incl. **jitter** (`JITAM/JITSP/JITSU/
