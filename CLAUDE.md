@@ -419,7 +419,19 @@ option tokens, which is now identified above — previously flagged as unknown.)
   DEMO.BAS` does exactly this: `SENS:FILT OFF` → `SENS:UFIL:PASS:LOW 3 KHZ` →
   `SENS:UFIL:PASS:UPP 4 KHZ` → **`SENS:FILT:UFIL1 ON`**. Defining a user filter does not engage it;
   the slot assignment is what routes it into the measurement chain. So the bandwidth-limited THD+N
-  measurement needs the assignment line our 2026‑09‑22 test was missing. Still to be run live.
+  measurement needs the assignment line our 2026‑09‑22 test was missing.
+  **VERIFIED LIVE 2026‑09‑24** (`scratchpad/filter_test.py`, B1 1 kHz 1 V loopback, THD+N):
+  none −106.6 · 20 kHz LP −106.7 · 10 kHz −108.5 · 5 kHz −110.5 · 3 kHz −112.4 dB — about 1.9 dB
+  per halving of bandwidth (white noise would give 3), so the loopback residual is LF-heavy.
+  Working order: `SENS:FILT OFF` → `SENS:UFIL1:LPAS ON` → `SENS:UFIL1:PASS <Hz>` →
+  `SENS:FILT1:UFIL1 ON`. **Gotcha: a 22 kHz LP is accepted when defined but rejected when routed**
+  (`111,"Device dep error; Error in Filter specification"` — too close to the A22 band edge), and
+  after that the filter refused further changes (`-222`). Keep LP cutoffs ≤ 20 kHz on A22.
+  **Filters apply to the FFT too** (up to 3). White noise (`SOUR:FUNC RAND; SOUR:RAND:DOM TIME;
+  SOUR:VOLT:TOT 1 V`) through `SENS:FILT1:AWE ON` reproduced the A-weighting curve (−17.7 dB near
+  100 Hz, +1.8 at 2–3 kHz, −7.5 at 15–18 kHz vs unfiltered); a user bandpass
+  (`SENS:UFIL2:BPAS ON; …:PASS:LOW 1000 HZ; …:PASS:UPP 5000 HZ; SENS:FILT1:UFIL2 ON`) was flat
+  1–5 kHz and 50–65 dB down outside. `CALC:TRAN:FREQ:AVER 16` averaging accepted.
   Manuals: `R&S_UPL_Audio_Analyzer_Op_Vol_1.pdf` / `_Vol_2.pdf` one level up from this folder.
   Vol 2 = remote/IEC‑bus command reference (confirmed).
   Extract text for searching with `pdftotext -layout <file> out.txt` (available in this env).
