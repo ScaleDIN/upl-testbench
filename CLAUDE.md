@@ -105,9 +105,45 @@ The CPU board is the **least R&S‑proprietary part** and is replaceable from th
     long-life cell, but ~20 years old.
   - **Module underside:** Davicom **DM9102AE** 10/100 Ethernet controller (date 0417), a
     **Xilinx** CPLD (most likely the ISA-bus glue logic), board ID "MODUL122".
-  - The Ethernet hardware exists on the module, but the UPL has no network port and its firmware
-    has no networking, so it is **not** a data-egress route as things stand. Only worth a look if
-    the carrier turns out to route those lines to a header.
+  - ~~The Ethernet hardware exists on the module, but the UPL has no network port… not a
+    data-egress route.~~ **CORRECTED by a third photo (full carrier, same day): the carrier has an
+    RJ45 jack, X106** — see "The R&S carrier board" below.
+
+  **The R&S carrier board (2094.0954.00), from a full photo:**
+
+  | Ref | What | Notes |
+  |---|---|---|
+  | left edge | **full ISA card-edge connector** | the carrier *is* an ISA card in the UPL backplane |
+  | X10, X20, X30, X40 | the four ETX mating sockets | |
+  | X3 | round DIN socket | most likely the keyboard |
+  | **X106** | **RJ45 jack** (integrated magnetics) | Ethernet from the module's DM9102AE — see below |
+  | **X120** | **34-pin FLOPPY header** | floppy is served by the *module's* Super I/O |
+  | X130 | small white header near X120 | power-style header, possibly floppy power; label not legible |
+  | — | Renata CR2477N 3 V lithium, in a holder | CMOS/RTC battery |
+  | S1 | small blue switch next to the battery | **function unknown — could be reset or CMOS-clear; don't operate before the BIOS photos** |
+  | label | R&S barcode sticker on the ISA edge | number looks like `1031.0409.02`, not reliably legible — read it off directly |
+
+  **Correction to the architecture notes, for this unit:** they say video, IDE and FDC are all on
+  the mainframe as separate ISA cards. On this unit the **floppy is not** — it comes from the
+  module's W83977F via X120. The carrier has **no IDE header and no VGA header**, which fits the
+  mainframe's own IDE and Cirrus VGA cards doing those jobs. So in BIOS terms: module FDC
+  **enabled and in use**; module IDE and video presumably disabled.
+
+  **Boot disk (answers longevity point 4, provisionally):** the module's CF socket is empty and
+  the carrier has no IDE header, so the unit almost certainly boots from the mainframe's IDE disk.
+  Confirm from the BIOS boot-device settings when photographing them.
+
+  **Ethernet as a possible data path — a lead, not a plan.** The module has the controller and
+  the carrier brings it to an RJ45. The UPL *application* has no networking, but DOS underneath
+  could: exit to DOS (SYSTEM / Ctrl‑F9, as `README.B23` describes), load a DOS packet driver for
+  the DM9102, and run something like mTCP's FTP server. That would move stored traces, setups,
+  and above all a **full disk backup** far faster than SNDFILE at 115 kbaud. It would not run
+  alongside measurements. Unverified at every step:
+  1. is X106 reachable from outside the case, or does it face into the chassis?
+  2. is the jack actually wired and the link working (link LEDs when a cable is plugged in)?
+  3. is a DOS packet driver for the DM9102AE available, and does it fit alongside the UPL's
+     HIMEM/EMM386 setup?
+  4. anything installed on the UPL disk goes on *after* the disk image is taken, not before.
 
   **What this changes for the longevity plan:**
   1. **Exact spare to hunt for:** Kontron **18003‑1280‑30‑1RS1**. A same-part NOS or pulled module
@@ -115,8 +151,10 @@ The CPU board is the **least R&S‑proprietary part** and is replaceable from th
   2. **ETX is confirmed, so a different ISA-capable ETX module on the *existing R&S carrier*
      (2094.0954.00) is now the preferred fallback over the Vortex86 ISA SBC** — the carrier and all
      its UPL-side wiring stay untouched. Per candidate module, still to verify: that it implements
-     the X2 ISA bus, boots DOS, and meets the UPL's ISA timing; and that its onboard video/IDE can
-     coexist with the mainframe's the same way the GX1's do.
+     the X2 ISA bus, boots DOS, and meets the UPL's ISA timing; that its onboard video/IDE can be
+     disabled to coexist with the mainframe's the same way the GX1's are; **that it provides the
+     floppy interface on X3**, because the carrier's FLOPPY header X120 is fed from it and that's
+     where the floppy drive / Gotek connects; and the keyboard (X3 DIN).
   3. **The BIOS setup is state worth recording.** The module has its *own* video, IDE and floppy
      controllers (CS5530A, W83977F), while this file's architecture notes put the UPL's video, IDE
      and FDC on the mainframe. If those onboard devices are disabled in CMOS setup, a flat CMOS
@@ -143,8 +181,12 @@ The CPU board is the **least R&S‑proprietary part** and is replaceable from th
 ### Replacement CPU spec (drop‑in target)
 - Single **16‑bit ISA card**, bus‑powered from +5V, mechanically fits the UPL card cage.
 - **586‑class x86 running DOS** (→ `UM586`). Moderate clock to avoid DOS delay‑loop timing bugs.
-- **Onboard VGA / IDE / FDC must be disable‑able** so they don't collide with the mainframe's
-  Cirrus VGA (A000/B800, 3C0–3DF), IDE (1F0/170), FDC (3F0). This is the only real constraint.
+- **Onboard VGA / IDE must be disable‑able** so they don't collide with the mainframe's
+  Cirrus VGA (A000/B800, 3C0–3DF) and IDE (1F0/170). **FDC: on this unit, the opposite** — the
+  floppy is served by the CPU board's own Super I/O through the carrier's X120 header (see the
+  carrier notes). A replacement board must therefore *provide* a working FDC and a floppy header
+  for the drive/Gotek, not disable it. (This line originally listed FDC with VGA/IDE as
+  "disable", from the general firmware analysis; the carrier photo shows it doesn't hold here.)
 - Must tolerate/ignore **−15V on B7** (the UPL busses −15V onto the standard −12V pin).
 - Best candidate: an **ICOP/DMP Vortex86 ISA SBC** (native DOS, real ISA, VGA/IO disable‑able).
   Zero‑risk alt: NOS **AI5VG+** or sibling Socket‑7 half‑size card.
