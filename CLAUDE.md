@@ -636,7 +636,12 @@ Do these in order; each step isolates one unverified assumption.
    which is what R&S's own programs actually send, rather than the manual's `TRACe1`/`TR1And2`.
 7. Then the transfer half: `ser_in.py` listening on the PC, Info Text + OPTIONS→SNDFILE on the UPL.
    Compare the received byte count against the `MMEM:STOR:INFO?` reply.
-8. FFT block paging: `upl_capture.py --port COMn fft --size 8192 -o /tmp/fft.csv`. Expect **3744**
+8. UPL‑B23 data library — cheap, do it while you're there:
+   `MMEM:CAT? 'C:\CODED\AC3\48000'` **and** `MMEM:CAT? 'C:\UPL\AC3\48000'` (the README and the
+   manual disagree on which path the firmware reads). If present, the smallest real test is
+   `INST D48; SENS:DIG:FEED ADAT; OUTP:SAMP:MODE F48; SOUR:FUNC CODedaud; SOUR:COD:FORM AC3;
+   SOUR:COD:CHAN CH2; SOUR:COD:FREQ F997` then `SYST:ERR?`.
+9. FFT block paging: `upl_capture.py --port COMn fft --size 8192 -o /tmp/fft.csv`. Expect **3744**
    lines spanning 0–21.9 kHz across 4 blocks, not 1024 lines stopping at 6 kHz. Then re-run
    `m51_jitter_fft.py` and confirm a tone above 6 kHz (e.g. `--freq 10000`) now appears at all —
    under the old single-`TRAC?` readout it could not have. Then try `--zoom 8 --center 10000`.
@@ -953,6 +958,137 @@ commands now confirmed in shipped firmware. `--setup` was added to `nsweep` for 
 - `SOUR:FUNC SIN`, `MMEM:DEL '<file>'`.
 - `INIT:CONT OFF;*WAI` as the single-sweep trigger — a third independent confirmation, now also
   from R&S's own shipped firmware rather than an app note.
+
+## UPA-CD Audio Test Disc + UPL‑B23 coded audio (added by user 2026‑09‑23)
+
+Two archives dropped in the parent folder, both unpacked and analysed. Neither is in git — they're
+large and not ours to redistribute (add to `.gitignore` if they ever move into this folder).
+
+### UPA-CD (Audio Test Disc UPA‑CD 852.8400.02)
+
+`UPA-CD-…zip`, 809 MB. Contains **47 tracks as bit-exact CD rips** (`Wav Files/NN - Name.wav`,
+**44.1 kHz / 16‑bit / stereo**, RIFF PCM), a scanned 16‑page `Booklet.pdf`, and a 529 MB
+`UPA-CD_Original.zip`. The booklet has **no text layer** — it's scans. Rendered and read with
+`pypdfium2` (installed into this env; `pdftotext` returns nothing, and there's no `pdftoppm`).
+
+Disc layout, from the booklet:
+
+| Tracks | Group | Covers |
+|---|---|---|
+| 1–9 | CD player / DAT recorder | S/N, dynamic range, D/A linearity, freq response, distortion, phase, crosstalk, IMD, output impedance |
+| 10–19 | Tape deck | S/N, wow & flutter, freq response, distortion vs level, crosstalk, IMD, output impedance |
+| 20–26 | Amplifier | S/N, freq response, distortion, phase, crosstalk, IMD, output impedance |
+| 27–31 | Automatic line test sequences | 5 self-contained stereo/mono sequences, each starting with a signalling burst |
+| 32–47 | Various | multifrequency, 1/3‑oct + white + pink noise, polarity, difference tones, square waves, bursts, half-waves |
+
+Tracks worth knowing by number (level in dBFS, all L+R unless noted):
+- **1** 1 kHz @ 0 dB — reference level and pitch · **2** silence — S/N · **3** 1 kHz @ −60 — dynamic range
+- **4** D/A linearity staircase, 2 kHz @ 0 alternating with 1 kHz at −20/−30/−40/−50/−60/−70/−80.1/
+  −85.2/−89.5/**−91.2 dB** — the bottom of the 16‑bit range
+- **5** 0.02–20 kHz sweep @ 0 dB, L then R (72 s each) — frequency response
+- **6** distortion + phase, 20 Hz…20 kHz stepped @ 0 dB · **7** crosstalk · **8** IMD 400 Hz + 7 kHz 4:1
+- **13/14/15** sweeps at −10 / −20 / −30 dB · **16** distortion vs level, 400 Hz at −30…0 dB
+- **32** multifrequency: 52.5 Hz, 315 Hz, 3.15 kHz, 6.3 kHz, 10.08 kHz, 12.6 kHz, −12 dB each,
+  sum level RMS −4.2 dB — one-shot frequency response
+- **33** 1/3‑octave noise, 40 Hz…16 kHz @ −20 — loudspeaker measurement
+- **34–37** white/pink noise, uncorrelated + correlated · **38** polarity (speakers) · **47** half-waves
+  440 Hz (polarity, lines)
+- **39/40/41** difference tones 9+11 k, 13+14 k, **19+20 kHz** · **42** SMPTE IMD 60 Hz + 7 kHz 4:1
+- **43/44** square waves 100 Hz / 1 kHz — step response · **45** bursts 0.4–300 ms — volume indicator
+- **46** 1 kHz tone-burst −40/0 dB — compressor test
+
+**Booklet warning, worth repeating:** *"This CD must be used with utmost care to avoid destruction of
+amplifiers or loudspeakers. Many tracks are recorded at much higher levels than conventional program
+sources."* Several tracks sit at 0 dBFS.
+
+**Track → UPL setup map**, read out of `CDTEST.BAS` (app note 1GA21, already extracted). The program
+prompts "Select track N and press <play>" and loads a matching `.SAC`:
+
+| Track | Setup loaded | Measurement |
+|---|---|---|
+| 1 | `CDA_BAS.SAC` | reference level (also the base setup, re-loaded between tests) |
+| — | `CDA_SNR.SAC` | S/N (track 2, silence) |
+| 3 | `CDA_DYN.SAC` | dynamic range |
+| 4 | (linearity) | D/A linearity |
+| 5 | `CDA_FREQ.SAC` | frequency response |
+| 6 | `CDA_THDN.SAC` | THD+N |
+| 7 | | crosstalk |
+| 8, 15 | | IMD / sweep at −30 dB |
+| 41 | | difference tone 19+20 kHz |
+| 42 | | SMPTE IMD |
+| 47 | | polarity |
+
+The full `CDA_*.SAC` set (12 files) is in `appnotes/1GA21_1E/CDPlayer/`.
+
+**Why this matters here: no CD player needed.** The tracks are plain 44.1/16 WAVs, so the existing
+laptop→USB→M51 chain replays them directly, with the UPL as analyzer and the `CDA_*.SAC` setups
+giving R&S's own measurement configuration. That turns 1GA21 into a runnable procedure for the M51
+without owning the physical disc or a transport.
+
+### UPL‑B23 "Coded Audio Signal Generation"
+
+`UPL-B23 - …zip`, 15 MB: three floppy images + their extracted contents + `CODED.zip` (2030 files).
+`README.B23` is original R&S; the `B23INST.BAT` files are a 2022 third-party repack ("BVKSound"),
+not R&S's own installer — worth knowing before trusting them.
+
+**What the data is.** Verified by parsing the WAV headers: 48 kHz / 16‑bit / stereo PCM containers
+whose payload begins `72 f8 1f 4e` — **IEC 61937 burst preamble** (Pa=0xF872, Pb=0x4E1F), Pc=1
+(AC‑3), followed by the AC‑3 sync word `0B77` byte-swapped. So these are Dolby Digital bitstreams
+packed for S/PDIF, not audio.
+
+**Filename convention** (decoded, then confirmed against the manual): `FFFFFLLL.WAV` = frequency in
+Hz + level in dB below FS. `00042020.WAV` = 41.7 Hz at −20 dBFS.
+
+**Structure, and why it's shaped that way** — file length is always a whole number of AC‑3 frames
+(1536 samples), chosen so the tone loops seamlessly, which sets the frequency resolution:
+
+| Band | Resolution | Frames/file | Samples |
+|---|---|---|---|
+| 5 Hz – 1 kHz | 5.21 Hz | 6 | 9216 |
+| 1 – 3 kHz | 10.42 Hz | 3 | 4608 |
+| 3 – 20 kHz | 31.25 Hz | 1 | 1536 |
+
+(31.25 Hz is exactly the AC‑3 frame rate, 48000/1536.) Counted in `20_192/`: **928 files across the
+full frequency grid, all at −20 dBFS** (the frequency-sweep set) plus **3 frequencies × 25 levels**
+(0 to −120 dBFS in 5 dB steps — the level-sweep set) = 1000 files. That matches the manual exactly:
+frequency variation and level variation are **mutually exclusive**, chosen by Vari Mode.
+
+**SCPI (Vol.2 §3.10.1.5.14, p.3.93–3.95).** Preconditions — all must hold or the function is
+unavailable: `INST D48` (digital generator), `SENS:DIG:FEED ADAT`, `OUTP:SAMP:MODE F48`.
+```
+SOUR:FUNC CODedaud
+SOUR:COD:FORM AC3                       ; only format implemented ("others in preparation")
+SOUR:COD:CHAN CH2 | CH6                 ; 2/0 @192 kb/s | 5.1 @448 kb/s -- freq AND level variable
+SOUR:COD:CHAN CHL|CHC|CHR|CHLS|CHRS|CHLF ; single channel @448 kb/s: 3 freqs only, fixed -20 dB
+; frequency variation:
+SOUR:FREQ:MODE FIX ; SOUR:FREQ <5.21 Hz..20 kHz>      ; level pinned at -20 dB
+; level variation:
+SOUR:VOLT:MODE FIX ; SOUR:COD:FREQ F042|F997|F15K     ; exactly 41.7 / 994.8 / 15000.0 Hz
+SOUR:VOLT:TOT <0..-120 dBFS>
+```
+Off-grid frequency and level values are snapped to the nearest available file. Both are sweepable
+with the ordinary generator sweep commands — so `nsweep` should drive this once it's verified.
+
+**Open item — path discrepancy.** Vol.2 says the firmware counts WAV files in
+`C:\UPL\AC3\48000\...`; `README.B23` and the installer both use **`C:\CODED\AC3\48000\`**. If the
+files aren't where the firmware looks, frequency selection silently collapses to whatever it finds.
+**Check on the instrument: `MMEM:CAT? 'C:\CODED\AC3\48000'` and `MMEM:CAT? 'C:\UPL\AC3\48000'`.**
+B23 is fitted (`*OPT?` lists B23) but that says nothing about whether the data library was ever
+installed.
+
+### Bonus: the ARBITRARY generator eats WAV files
+
+Vol.1 §2.5.4.10 — `SOUR:FUNC ARB` + `MMEM:LOAD:LIST ARBitrary,'<file>'` accepts five formats:
+TTF and AWD (ASCII/designer output, max 16384 samples), **WAV (8- or 16-bit, _any length_;
+16‑bit needs model 06/66, i.e. a Pentium CPU — ours is, per the CPU analysis above)**, CPR
+(compressed, for 486-era units), and **ACC — "a special compressed waveform format for WAV files
+containing AC3 or MPEG data coded in line with IEC 61937", digital generator only.**
+
+So there are two routes to coded audio: the structured B23 library, or an ACC-converted IEC 61937
+WAV through ARBITRARY. And UPA-CD tracks could in principle be played from the UPL's own generator
+as ARB WAVs — but note analog output requires 48 kHz (the tracks are 44.1) and a 3–30 MB track
+would take ~45 min to push over RS232 at 115 kbaud. **Replaying from the laptop is the practical
+path; ARB is for short custom waveforms.**
 
 ## Full BASIC-source sweep, 2026‑09‑23 — every `.BAS` in every archive
 
