@@ -261,6 +261,35 @@ Rules if this gets tried:
 - Compare against `SETUP/CAL_*.SET` on the disk: calibration may be held in both places, in which
   case the disk image already covers it and the EEPROM dump is belt and braces.
 
+**Implemented as `upl_capture.py diagdump` (2026‑09‑23, not yet run against hardware).** The
+rules above are enforced in code, not left to the operator:
+- Every `DIAG:DEV:DATA` goes through `_diag_query()`, which raises on anything not ending in `?`
+  — a write can't be sent even by mistake.
+- Selectors are an allow-list (`SERN CAGEn CANLr0 CLDG CDPHase INSTkey RTEMperature`); the risky
+  ones (`REG PIN ENPin CALDcout DSPA DSPB RX1 RX2 TX1 TX2`) are refused **before any command is
+  sent**, even when mixed with allowed ones.
+- `SYST:ERR?` after every select, every `ADDR`, and every read. A table ends at the first error,
+  at a read timeout (the port is then drained so a late reply can't shift later values), or at
+  `--max-addr` (default 2048, the X24164's size).
+- A selector the instrument rejects is recorded as rejected and skipped; the others still run.
+- Values are stored **raw** — their format is unknown, so nothing is parsed. Output is
+  `<name>.csv` (device, addr, raw_value, with `*IDN?` in the header) plus `<name>.json`
+  (per-table word count and why it stopped).
+
+`seqcheck` now asserts all of the above against a stub that simulates table ends, a rejected
+selector and a mid-table timeout.
+
+**First live run — go in this order:**
+```
+python upl_capture.py --port COM7 diagdump --devices SERN -o results/diag_sern
+```
+The serial is known (**100330/6**), so this one run checks that the walk works, what `SYST:ERR?`
+says at the end of a table, and what the raw values look like — all against a known answer.
+Only then run the default list:
+```
+python upl_capture.py --port COM7 diagdump -o results/diag_full
+```
+
 ### Longevity action plan (priority order)
 1. **Image the mainframe boot disk (raw) and archive the calibration data NOW** — the only
    irreplaceable state. (Board is replaceable; its stored state is not.) **Also photograph every

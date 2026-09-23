@@ -97,6 +97,13 @@ class UPL:
         """Raise/lower the reply timeout (a native sweep can block for minutes)."""
         self.ser.timeout = seconds
 
+    def drain(self, settle=0.3):
+        """Discard any late reply. After a query times out, the UPL may still answer
+        it; without this, that stale reply would be read as the answer to the
+        *next* query and every value after it would be shifted by one."""
+        time.sleep(settle)
+        self.ser.reset_input_buffer()
+
     def close(self):
         self.ser.close()
 
@@ -118,6 +125,13 @@ class DryRunUPL:
         self.fft_res = fft_res
         self.fft_start = fft_start
         self.block = 0
+        # Simulated DIAG:DEV: table sizes per selector. Selecting an unknown one,
+        # or addressing past the end, queues an error for the next SYST:ERR? --
+        # which is how the real instrument is expected to signal "end of table".
+        self.diag_tables = {"SERN": 2, "CAGEN": 6, "CANLR0": 4, "CLDG": 3, "CDPHASE": 2, "INSTKEY": 2}
+        self.diag_dev = None
+        self.diag_addr = 0
+        self.pending_error = None
 
     def _block_slice(self):
         lo = self.block * FFT_BLOCK
@@ -143,7 +157,12 @@ class DryRunUPL:
         if c.startswith("*OPC?"):
             return "1"
         if c.startswith("SYST:ERR"):
-            return '0,"No error"'
+            err, self.pending_error = self.pending_error, None
+            return err or '0,"No error"'
+        if c.startswith("DIAG:DEV:DATA?"):
+            # plausible-looking words, distinct per table and address
+            return str(1000 * (list(self.diag_tables).index(self.diag_dev) + 1) + self.diag_addr) \
+                if self.diag_dev in self.diag_tables else "0"
         if c.startswith("CALC:TRAN:FREQ:RES"):
             return f"{self.fft_res} Hz"
         if c.startswith("CALC:TRAN:FREQ:SPAN"):
@@ -182,10 +201,23 @@ class DryRunUPL:
     # --- same surface as UPL ----------------------------------------------
     def write(self, cmd):
         self.sent.append(cmd)
-        if cmd.strip().upper().startswith("DISP:TRAC:IND"):
+        c = cmd.strip().upper()
+        if c.startswith("DISP:TRAC:IND"):
             self.block = int(cmd.split()[-1])
+        elif c.startswith("DIAG:DEV:ADDR"):
+            self.diag_addr = int(cmd.split()[-1])
+            if self.diag_dev in self.diag_tables and self.diag_addr >= self.diag_tables[self.diag_dev]:
+                self.pending_error = '-222,"Data out of range"'
+        elif c.startswith("DIAG:DEV "):
+            self.diag_dev = c.split()[-1]
+            self.diag_addr = 0
+            if self.diag_dev not in self.diag_tables:
+                self.pending_error = '-224,"Illegal parameter value"'
         if self.echo:
             print(f"  ->  {cmd}")
+
+    def drain(self, settle=0.0):
+        pass
 
     def query(self, cmd):
         self.sent.append(cmd)
@@ -660,6 +692,116 @@ def cmd_storetrace(upl, args):
     return 0
 
 
+# --- DIAG:DEV read-only dump -------------------------------------------------
+#
+# DIAG:DEV is undocumented. R&S's own selftest (SELFTEST_Program.TXT) uses it to
+# read the serial number:  DIAG:DEV SERN ; DIAG:DEV:ADDR n ; DIAG:DEV:DATA?
+# In UPL_UI.EXE's keyword table SERNumber sits among the selectors below, which
+# look like calibration tables and the option key. Only SERN is proven.
+
+DIAG_PROVEN = ("SERN",)
+# Believed to be stored-state reads: calibration tables, the option key, a sensor.
+DIAG_ALLOWED = ("SERN", "CAGEn", "CANLr0", "CLDG", "CDPHase", "INSTkey", "RTEMperature")
+DIAG_DEFAULT = ("SERN", "CAGEn", "CANLr0", "CLDG", "CDPHase", "INSTkey")
+# Refused outright: these sound like live hardware access (registers, pins,
+# DSP memory, serial links, a DC output) where merely selecting them might act.
+DIAG_REFUSED = {
+    "REG": "register access", "PIN": "pin access", "ENPIN": "pin enable",
+    "CALDCOUT": "DC output", "DSPA": "DSP A memory", "DSPB": "DSP B memory",
+    "RX1": "serial link", "RX2": "serial link", "TX1": "serial link", "TX2": "serial link",
+}
+
+
+def _diag_query(upl, cmd):
+    """The only way diagdump talks to DIAG:DEV:DATA -- and only as a query.
+    A bare `DIAG:DEV:DATA <value>` would be a write into calibration storage."""
+    if not cmd.rstrip().endswith("?"):
+        raise RuntimeError(f"refusing non-query DIAG command: {cmd!r}")
+    return upl.query(cmd)
+
+
+def _err(upl):
+    return upl.query("SYST:ERR?").strip()
+
+
+def cmd_diagdump(upl, args):
+    """READ-ONLY dump of the UPL's per-unit stored state via undocumented DIAG:DEV.
+
+    For each selector: select it, then walk DIAG:DEV:ADDR 0,1,2,... reading
+    DIAG:DEV:DATA? until the instrument reports an error (end of table), a read
+    times out, or --max-addr is reached. Every step is followed by SYST:ERR?.
+    Replies are recorded raw -- their format is unknown, so nothing is parsed.
+
+    NOT YET RUN AGAINST HARDWARE. Try `--dry-run` first, then a real run with
+    `--devices SERN` (the one proven selector) before the full default list."""
+    import datetime
+    import json
+
+    devices = [d.strip() for d in args.devices.split(",")] if args.devices else list(DIAG_DEFAULT)
+    allowed_upper = {d.upper(): d for d in DIAG_ALLOWED}
+    for d in devices:
+        if d.upper() in DIAG_REFUSED:
+            raise SystemExit(f"refusing selector {d!r} ({DIAG_REFUSED[d.upper()]}): it may act on "
+                             "live hardware. diagdump only reads stored-state tables.")
+        if d.upper() not in allowed_upper:
+            raise SystemExit(f"unknown selector {d!r}. Allowed: {', '.join(DIAG_ALLOWED)}")
+
+    idn = upl.query("*IDN?").strip()
+    start_err = _err(upl)
+    if not start_err.startswith("0,"):
+        print(f"note: error queue was not empty at start: {start_err} (drained)", file=sys.stderr)
+        for _ in range(20):                       # drain anything left over
+            if _err(upl).startswith("0,"):
+                break
+
+    rows, summary = [], {}
+    for dev in devices:
+        sel = "SERN" if dev.upper() == "SERN" else allowed_upper[dev.upper()]
+        upl.write(f"DIAG:DEV {sel}")
+        err = _err(upl)
+        if not err.startswith("0,"):
+            print(f"  {sel:13s} not accepted: {err}", file=sys.stderr)
+            summary[sel] = {"status": "rejected", "error": err, "words": 0}
+            continue
+        words, stop = [], "max-addr"
+        for addr in range(args.max_addr):
+            upl.write(f"DIAG:DEV:ADDR {addr}")
+            err = _err(upl)
+            if not err.startswith("0,"):
+                stop = f"address rejected at {addr}: {err}"
+                break
+            try:
+                val = _diag_query(upl, "DIAG:DEV:DATA?").strip()
+            except TimeoutError:
+                upl.drain()
+                stop = f"read timed out at {addr}"
+                break
+            err = _err(upl)
+            if not err.startswith("0,"):
+                stop = f"read error at {addr}: {err}"
+                break
+            words.append(val)
+            rows.append((sel, addr, val))
+        summary[sel] = {"status": "read", "words": len(words), "stop": stop, "values": words}
+        preview = " ".join(words[:8]) + (" ..." if len(words) > 8 else "")
+        print(f"  {sel:13s} {len(words):4d} words  [{stop}]  {preview}", file=sys.stderr)
+
+    ts = datetime.datetime.now()
+    base = args.output or ts.strftime("diagdump_%Y%m%d_%H%M%S")
+    base = base[:-4] if base.lower().endswith((".csv", ".txt")) else base
+    with open(base + ".csv", "w") as f:
+        f.write(f"# UPL DIAG:DEV read-only dump  {ts.isoformat()}\n# *IDN? {idn}\n")
+        f.write("device,addr,raw_value\n")
+        for sel, addr, val in rows:
+            f.write(f"{sel},{addr},{val}\n")
+    with open(base + ".json", "w") as f:
+        json.dump({"timestamp": ts.isoformat(), "idn": idn, "devices": summary}, f, indent=2)
+    print(f"wrote {len(rows)} words -> {base}.csv / {base}.json", file=sys.stderr)
+    print("Keep these files with the disk image: they are this unit's identity and calibration.",
+          file=sys.stderr)
+    return 0
+
+
 def _basename(path):
     return path.replace("/", "\\").rsplit("\\", 1)[-1]
 
@@ -822,6 +964,67 @@ def cmd_seqcheck(upl, args):
     if any(c.startswith("MMEM:STOR:STAT") for c in stub.sent):
         failures.append("preserve: snapshotted without --preserve")
 
+    # --- diagdump: read-only guarantees ---
+    import re as _re
+    import tempfile
+    tmp = tempfile.mkdtemp()
+    stub5 = DryRunUPL(echo=False)
+    dd = _ap.Namespace(devices=None, max_addr=2048, output=f"{tmp}/dd")
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        cmd_diagdump(stub5, dd)
+    writes = [c for c in stub5.sent if _re.match(r"DIAG:DEV:DATA(?!\?)", c.strip().upper())]
+    if writes:
+        failures.append(f"diagdump: sent non-query DIAG:DEV:DATA {writes[:2]}")
+    sent_sel = {c.split()[-1].upper() for c in stub5.sent if c.upper().startswith("DIAG:DEV ")}
+    if sent_sel & set(DIAG_REFUSED):
+        failures.append(f"diagdump: selected refused device(s) {sent_sel & set(DIAG_REFUSED)}")
+    # every ADDR must be followed immediately by an error check
+    for i, c in enumerate(stub5.sent):
+        if c.startswith("DIAG:DEV:ADDR") and (i + 1 >= len(stub5.sent) or stub5.sent[i + 1] != "SYST:ERR?"):
+            failures.append(f"diagdump: '{c}' not followed by SYST:ERR?")
+            break
+    words = sum(1 for c in stub5.sent if c == "DIAG:DEV:DATA?")
+    if words != sum(DryRunUPL().diag_tables[d.upper()] for d in DIAG_DEFAULT):
+        failures.append(f"diagdump: read {words} words, expected every table read to its end")
+    print(f"  diagdump: {words} words, query-only, no refused selectors, SYST:ERR? after every ADDR")
+
+    # refused selectors must be rejected before anything is sent
+    stub6 = DryRunUPL(echo=False)
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            cmd_diagdump(stub6, _ap.Namespace(devices="SERN,REG", max_addr=4, output=f"{tmp}/x"))
+        failures.append("diagdump: accepted a refused selector")
+    except SystemExit:
+        if stub6.sent:
+            failures.append(f"diagdump: sent {stub6.sent} before refusing")
+    print("  diagdump: refused selector stops the run before any command is sent")
+
+    # a rejected selector is skipped; a timed-out read drains the port and stops that table
+    class _Flaky(DryRunUPL):
+        def __init__(self):
+            super().__init__(echo=False)
+            self.diag_tables = {"SERN": 2, "CAGEN": 10}
+            self.drained = 0
+        def query(self, cmd):
+            if cmd == "DIAG:DEV:DATA?" and self.diag_dev == "CAGEN" and self.diag_addr == 3:
+                self.sent.append(cmd)
+                raise TimeoutError("simulated")
+            return super().query(cmd)
+        def drain(self, settle=0.0):
+            self.drained += 1
+    stub7 = _Flaky()
+    with contextlib.redirect_stderr(io.StringIO()):
+        cmd_diagdump(stub7, _ap.Namespace(devices="SERN,CLDG,CAGEn", max_addr=2048, output=f"{tmp}/y"))
+    import json as _json
+    got = _json.load(open(f"{tmp}/y.json"))["devices"]
+    if got.get("CLDG", {}).get("status") != "rejected":
+        failures.append("diagdump: an unsupported selector was not recorded as rejected")
+    if got.get("CAGEn", {}).get("words") != 3 or stub7.drained != 1:
+        failures.append("diagdump: timeout did not stop the table at 3 words with one drain")
+    if got.get("SERN", {}).get("words") != 2:
+        failures.append("diagdump: the table before the failures was affected")
+    print("  diagdump: rejected selector skipped; read timeout drains once and stops that table")
+
     # --- parse_values error path ---
     for bad in ("No Values", ""):
         try:
@@ -923,6 +1126,14 @@ def main():
     st.add_argument("--xaxis-name", help="explicit path for the X-axis file (default: derived from remote)")
     st.add_argument("--verify", action="store_true", help="MMEM:CAT? the directory afterwards")
 
+    dd = sub.add_parser("diagdump", help="READ-ONLY dump of per-unit stored state (serial, cal tables, option key) "
+                                         "via undocumented DIAG:DEV -- unverified")
+    dd.add_argument("--devices", help=f"comma-separated selectors (default: {','.join(DIAG_DEFAULT)}); "
+                                      f"allowed: {','.join(DIAG_ALLOWED)}")
+    dd.add_argument("--max-addr", type=int, default=2048,
+                    help="stop walking a table after this many addresses (default 2048 = the X24164's size)")
+    dd.add_argument("-o", "--output", help="output base name; writes <name>.csv and <name>.json")
+
     sub.add_parser("seqcheck", help="offline: assert the nsweep/storetrace SCPI matches the documented sequences")
 
     c = sub.add_parser("catalog", help="list files on the UPL (MMEM:CAT?)")
@@ -959,6 +1170,7 @@ def main():
             "sweep": cmd_sweep,
             "nsweep": cmd_nsweep,
             "fft": cmd_fft,
+            "diagdump": cmd_diagdump,
             "storetrace": cmd_storetrace,
             "autoexport": cmd_autoexport,
             "catalog": cmd_catalog,

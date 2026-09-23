@@ -134,6 +134,26 @@ It's opt-in because it writes a file to the instrument's disk.
 `nsweep --setup C:\UPL\MYSETUP.SAC` loads a stored setup first (`MMEM:LOAD:STAT 0`) — again how
 R&S's own programs configure a measurement, rather than sending every panel setting.
 
+### Backing up per-unit state (`diagdump`) — unverified
+
+```bash
+python upl_capture.py --dry-run diagdump                          # offline, see what it would do
+python upl_capture.py --port COM7 diagdump --devices SERN -o results/diag_sern   # first live run
+python upl_capture.py --port COM7 diagdump -o results/diag_full                  # then the full set
+```
+
+A **read-only** dump of what looks like the unit's stored identity and calibration — serial number,
+calibration tables, the installed option key — using the undocumented `DIAG:DEV` command that
+R&S's own selftest uses to read the serial number. The one chip holding this data (an X24164
+EEPROM on the Digital Board) is cheap to replace, but its contents aren't; this is the attempt to
+back them up without opening the case.
+
+Only `SERN` is proven. The other selector names come from the firmware's keyword table and are
+inferred — `CLAUDE.md` has the reasoning. Safety is enforced in code: it can only send the query
+form (`DATA?`), it refuses selectors that sound like live hardware access before sending anything,
+and it checks `SYST:ERR?` after every step. Start with `--devices SERN` — the serial is known, so
+that first run can be checked against a known answer.
+
 ### Getting a stored file off the UPL
 
 `storetrace` is the "save on the instrument" half — it writes the trace (and optionally the X-axis
