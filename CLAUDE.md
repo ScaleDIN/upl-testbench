@@ -210,8 +210,9 @@ firmware binary:
 
 | Part | Board | Kind | Holds code/data? | If it dies |
 |---|---|---|---|---|
-| **SERPA, `8002-713`** (made by **VLSI**, R&S stock 1030.8570.00) | Digital 1078.2708 | custom **gate array** | **No** — logic fixed in the metal at manufacture | Irreplaceable except from a donor. **Several instances**: the parts list pairs it with positions D1–D5, and schematic sheets label instances for the generator (`GEN_SERPA`), analyzer (`ANA SERPA`) and DSP sections (`DSP-B SERPA`). Name suggests SERial/PArallel converter — an inference, not documented. |
-| **PERIF2, `L5A8612`** | Digital 1078.2708 | custom **ASIC**, "KEYBOARD INTERF." | **No** | Donor only. Drives the front-panel keys/encoder. |
+| **SERPA, `8002-7106`** (made by **VLSI**, chip marked `VY17136-2`, R&S stock 1030.8570.00) | Digital 1078.2708 | custom **gate array** | **No** — logic fixed in the metal at manufacture | Irreplaceable except from a donor. **Exactly 4 instances, all the same part** (schematic read 2026-09-23): D1 = ISA host interface at I/O 390h, D39 = `GEN_SERPA`, D41 = `ANA_SERPA`, D40 = `DSP-B SERPA`. It *is* a serial↔parallel bridge (ISA or TMS320C3x bus ↔ C3x-format serial ports). Full pin/register model: **`SERPA_PERIF.md`**. |
+| **PERIF2, `L5A8612`** (LSI Logic, R&S 0009.0432) | Digital 1078.2708 | custom **ASIC**, "KEYBOARD INTERF." | **No** | Donor only. Key matrix, rotary encoder, LCD-contrast pot, IRQ via SERPA; I/O 4390h. Pinout + register model in **`SERPA_PERIF.md`**. Its sheet is missing from the Vol.2 scan but present as "KEYBOARD DECODER" (ref D24) in Drive *Schaltplan_ocr.pdf*. |
+| **Battery-backed setup RAM** (2× TC55257, battery G2 3.4 V) | Digital 1078.2708 | standard SRAM | **Yes — per-unit setup state** | Contents lost if G2 dies; reached only via SERPA port 0x3392 (auto-increment counter). See `SERPA_PERIF.md` §2.6. |
 | **Xicor `X24164`**, 2K × 8 serial EEPROM | Digital 1078.2708 | standard part | **Yes — the only chip on the R&S boards with unique per-unit data** | The chip is trivially replaceable; its *contents* are not. See below. |
 | TMS320C31 DSP × 2 | Digital | standard TI | No on-board code: `A.OUT`/`B.OUT` are loaded from disk at boot (see architecture notes) | Obsolete but standard. |
 | Cirrus `GD6205` LCD/VGA, NI `TNT4882C` GPIB, SMC `FDC37C665` FDC, `MAX239` RS-232 | Digital | standard | No | Obsolete standard parts; used/NOS. |
@@ -226,10 +227,10 @@ It covers every SERPA position, PERIF2, and all the obsolete standard parts in o
 donor's X24164 holds the *donor's* identity/calibration, so a board swap means carrying this unit's
 EEPROM contents across — which is why backing those contents up now matters.
 
-**Caveats:** SERPA instance count (D1–D5) comes from OCR'd parts-list layout; the schematic OCR
-also reads the part number as something like "8002-716" in three places, which may be a misread
-of `-713` or a second variant — check the chip markings. One schematic sheet OCRs a stray "PAL"
-too garbled to call; no PAL appears in any parts list.
+**Resolved 2026-09-23** (schematic page images + chip photo): the part number is `8002-7106`
+on every sheet, and there are four instances (D1, D39, D40, D41). The earlier "D1–D5" and
+"-713/-716" readings were OCR noise. The X24164 is the only store of *calibration*, but the
+battery-backed setup RAM (above) also holds per-unit state.
 
 #### Reading the EEPROM over RS-232 — a strong lead, unverified
 
