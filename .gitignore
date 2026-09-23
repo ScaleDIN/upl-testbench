@@ -1,0 +1,16 @@
+# R&S proprietary firmware -- not ours to redistribute
+/DISK1/
+/DISK2/
+/UPL_306.EXE
+/ReadMe.txt
+
+# generated test output (CSV/JSON results, self-test reports) -- scripts are
+# the reusable part, not one session's numbers
+/scratchpad/*.csv
+/scratchpad/*.json
+/scratchpad/*.txt
+/upl_selftest_*.txt
+
+# python
+__pycache__/
+*.pyc

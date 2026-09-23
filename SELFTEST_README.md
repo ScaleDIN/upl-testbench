@@ -1,0 +1,109 @@
+# UPL Self-Test — Standalone Guide
+
+`upl_selftest.py` is a remote replica of Rohde & Schwarz's own factory self-test
+(`SELFTEST_Program.TXT`, which runs natively on the UPL's own BASIC interpreter and only shows
+a PASS/FAIL indicator per line on the front panel). This script runs the identical command
+sequence from a PC over the remote-control link and prints **every underlying measured value**,
+plus writes a full text report you can keep and diff against future runs.
+
+Reference run: 2026-09-22, serial 100330/6, firmware 3.06 — **121/121 readings passed**. See
+`CLAUDE.md` for the full result table if you want something to compare a new run against.
+
+## What it needs
+
+- The UPL connected via USB-serial to this PC, with the UPL's OPTIONS panel set to **remote
+  control on COM2** (not IEC-bus), matching whatever baud you pass to `--baud` (the OPTIONS
+  panel's COM2 baud setting and this script's `--baud` must agree — see below).
+- **Nothing physically connected to the UPL's generator or analyzer inputs/outputs.** This test
+  is entirely internal loopback (`INP:TYPE GEN2` — the UPL measures its own generator). Remove
+  any cables from the front panel before running, same as the front-panel version's own warning.
+- `pyserial` installed (`python -m pip install pyserial`) and `upl_capture.py` in the same folder
+  (it supplies the `UPL` serial class this script is built on).
+
+## How to run it
+
+```bash
+python upl_selftest.py --port COM7
+```
+
+That's the whole thing for a default run. Useful variations:
+
+```bash
+# different port or baud
+python upl_selftest.py --port COM7 --baud 115200
+
+# name the report file yourself instead of the auto timestamp
+python upl_selftest.py --port COM7 -o results/selftest_2026-09-23.txt
+
+# if a run shows a spurious "N/A" reading right after a frequency change,
+# give the generator more time to settle before the first measurement
+python upl_selftest.py --port COM7 --settle 0.8
+```
+
+Default baud is **115200** (confirmed working directly on real hardware — see `CLAUDE.md`; the
+Vol.2 manual's own SCPI baud table was incomplete and only listed up to 56000). Set the UPL's
+OPTIONS panel COM2 baud to match, or override with `--baud` if you're running it at something
+else.
+
+## What happens when you run it
+
+1. Sends `*RST` — **this clears whatever setup is currently on the UPL's screen**, exactly like
+   the front-panel self-test does. Reload your own working setup afterward if you had one loaded.
+2. Reads `*OPT?` and the unit's serial number, and works out which sections apply based on which
+   options are fitted (e.g. the low-distortion-generator section is skipped if B1 isn't installed,
+   the digital-audio section is skipped if no digital option is present).
+3. Runs through 10 sections at full resolution, matching the original program point-for-point:
+
+   | # | Section | Points | Spec |
+   |---|---|---|---|
+   | 1 | Generator range control | 6 (30mV–20V) | ±1.6–2% |
+   | 2 | Low-distortion generator (B1) | 4 (150Hz–25kHz) | ±1.6–2.7% / 0.8% |
+   | 3 | Analyzer ranges | 48 (16 levels × {1kHz, 40Hz, 15kHz}) | ±1.5–3.0% |
+   | 4 | Inherent THD+N @1kHz/2V, A22 | 1 | ≤ −93dB |
+   | 5 | THD+N −60dB linearity (2-tone) | 1 | ±0.5dB |
+   | 6 | Inherent THD+N @1kHz/2V, A100 | 1 | ≤ −84dB |
+   | 7 | Inherent D2 (DFD) @10kHz/200Hz | 1 | ≤ −110dB |
+   | 8 | Inherent noise, A22 | 1 | ≤ 2µV |
+   | 9 | Inherent noise, A100 | 1 | ≤ 8µV |
+   | 10 | Digital audio level/freq (B29) | 3 | 0.1% / 0.01% |
+
+4. Prints every reading live as it goes (set value, measured value, deviation, tolerance, and a
+   `<-- OUT OF TOL` flag on anything that fails), then a summary listing every out-of-tolerance
+   reading, then `OVERALL: PASS` or `OVERALL: FAIL`.
+5. Writes the identical text to a report file — default name
+   `upl_selftest_<YYYYMMDD_HHMMSS>.txt` in the current folder, or your own path via `-o`.
+
+Takes a few minutes end-to-end (121 readings; section 3 alone is 48 of them).
+
+## Reading the output
+
+Each line looks like:
+
+```
+  set   0.030 V -> CH1 0.02992 V (-0.24%)  CH2 0.02992 V (-0.26%)  tol 2%
+```
+
+`set` is the commanded value, the two channel readings are what the UPL actually measured, the
+percentages are the deviation, and `tol` is the R&S factory tolerance for that point. Anything
+exceeding tolerance gets an inline `<-- OUT OF TOL` marker and shows up again in the final
+summary with its full detail (section, channel, set value, measured value, deviation, tolerance).
+
+The exit code is `0` for a full pass and `1` if anything failed — useful if you ever want to
+script "run self-test, alert me only if something's wrong."
+
+## Gotchas
+
+- **`*RST` wipes your setup.** If you have a working setup loaded, save it or note it down before
+  running this, and reload it afterward.
+- **A "reading" of `9.93e37` (or similar absurdly large values) is the UPL's own "not available"
+  sentinel**, not a real measurement — this script already filters/flags these, but if you're
+  reading a report by hand, don't mistake one for an actual out-of-range value.
+- **The one false-failure this script is specifically guarding against**: switching frequency
+  bands too fast, right before the very first reading at the new frequency, can catch the UPL
+  mid-settle and return the "N/A" sentinel — logged as an out-of-tolerance point even though the
+  instrument is fine. The default `--settle 0.4` was chosen after hitting exactly this on the
+  first full run (at 15kHz/18mV); raise it if you see an isolated, otherwise-inexplicable failure
+  right after a `--- @ ... ---` section header in the console output.
+- This is a **condensed-but-full-resolution** replica, not a byte-for-byte port of the BASIC
+  source — a couple of front-panel-only conveniences (live pass/fail markers drawn as boxes on
+  screen) aren't reproduced, since the whole point here is the numeric values instead.
