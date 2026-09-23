@@ -465,12 +465,18 @@ The receiver must detect completion by **idle timeout** after the last byte (thi
 Reimplemented as **`ser_in.py`** in this folder (pyserial, idle‑timeout capture) — see its
 docstring for full usage. Quick version:
 ```
-# 1. On UPL: Display panel -> Info Text -> type the source path, e.g. C:\UPL\MYTRACE.EXP
+# 1. On UPL: FILE panel -> Info Text (under STORE INSTRUMENT STATE) -> full source path,
+#    e.g. C:\UPL\MYTRACE.EXP   (1GA42 says "Display panel" -- wrong for firmware 3.06)
 # 2. On PC, start the receiver FIRST (must be listening before the send is triggered):
 python ser_in.py --port COM2 out\MYTRACE.EXP
-# 3. On UPL: OPTIONS panel -> select SNDFILE to start the transfer.
+# 3. On UPL: OPTIONS panel -> Exec Macro -> SELECT (file box of *.BAS) ->
+#    C:\UPL\USER\SNDFILE.BAS -> ENTER. There is no menu item called "SNDFILE".
 # 4. ser_in.py stops itself on idle timeout and reports the byte count.
 ```
+**VERIFIED LIVE 2026‑09‑23** — see "Live bring-up results". The `COMX.SYS` driver was already
+installed on this unit (SNDFILE opened COM2 fine), so **`DRV_INST.BAS` is not needed**. For the
+record, DRV_INST is *not* a read-only check: if `CONFIG.SYS` has no `device…comx` line it appends
+`devicehigh=c:\upl\driver\comx.sys` *before* asking "Reboot now <Y> or quit <Q>".
 
 **Remote/IEC trigger sequence per the app note** (not yet tried live):
 ```
@@ -931,9 +937,33 @@ Internal loopback (`*RST; INP:TYPE GEN2`), UPL on PC COM2 at 115200.
   median line 0.36 µV (~−129 dB) — in block 1, which the old single `TRAC?` never returned.
   Zoom 8 @ 10 kHz: **7488 lines, 8 blocks (7 × 1024 + 320)**, exactly the manual's worked example,
   7257.8–12741.5 Hz, 0.73 Hz resolution, peak at 9997.8 Hz in block 3.
-- **`storetrace` — writes accepted, contents unverified.** `C:\UPL\ZFR40.EXP` (trace A, EXPort) and
-  `C:\UPL\ZFR40X.EXP` (X list) stored with `0,"No error"`. The long manual forms (`TRACe1`) work.
-  Verification is pending the SNDFILE transfer. `ZFR40*.EXP` are test files, safe to delete.
+- **`storetrace` + SNDFILE — VERIFIED END TO END. The Gotek is no longer needed for traces.**
+  `C:\UPL\ZFR40.EXP` (trace A, EXPort) and `C:\UPL\ZFR40X.EXP` (X list) stored with `0,"No error"`;
+  the long manual forms (`TRACe1`) work, and a full path overrides Work Dir (files landed in
+  `C:\UPL`, not the `C:\UPL\USER` work dir). The FILE panel's STORE TRACE/LIST fields then showed
+  the last remote store (`X AXIS / EXPORT / ZFR40X.EXP`). SNDFILE sent **863 bytes**; all 40
+  values match the SCPI `TRAC?` readout to within 0.00005 V. What the EXPort file looks like:
+  ```
+  #X / Hz   	Y / V    	
+   20.0000 	 0.9981 	
+   23.8755 	 0.9983 	      (tab-separated, header line, one row per point)
+  ```
+  So **an EXPort trace already contains the X axis** — `--xaxis` is redundant for EXPort. And
+  EXPort carries **display precision only (4 significant digits)**, whereas `TRAC?` over SCPI gives
+  6. For numbers, prefer `nsweep`'s direct readout; storetrace + SNDFILE is for when the file itself
+  is wanted, or for traces too long to be worth the SCPI round trips. `ZFR40*.EXP` are test
+  files, safe to delete.
+- **The front-panel file box is the working substitute for `MMEM:CAT?`.** Any filename field →
+  SELECT opens a browser (`*.*` from FILE→Copy SOURCE; `*.BAS` from OPTIONS→Exec Macro).
+  `C:\UPL\USER` holds `DRV_INST SNDFILE FLAT_GEN IMPEDANC INIT SELFTEST USERMAC .BAS`.
+- **`FLAT_GEN.CAL` IS PRESENT in `C:\UPL\REF`** — the generator flatness correction is active at
+  boot, so every internal-generator measurement we've made (the DCX2496/M51 sweeps, this loopback)
+  included it. Per Vol.1 §2.6.9 it contains the *analyzer's* inverted residual response too, so it
+  is right for UPL-gen → DUT → UPL-analyzer, and wrong only if the generator drives an external
+  analyzer. Same directory also holds the analyzer flatness files **`FLAT1AC.CAL FLAT1DC.CAL
+  FLAT2AC.CAL FLAT2DC.CAL FLAT_AC.CAL FLAT_DC.CAL`** plus `EANSTR.XMM`, `GLEI_RAU.BPZ`,
+  `GL_EPI.LOG` (list continues off-screen) — **per-unit calibration, back up `C:\UPL\REF` with the
+  disk image.** It's also a candidate for a no-screwdriver backup now: SNDFILE each file.
 - **`MMEM:CAT?` is BROKEN on this firmware — don't use it.** With a path argument → `-100 Command
   error`. Without one → returns 1024 comma-separated numbers: the last FFT/trace block buffer, not a
   directory listing. So `catalog` and `storetrace --verify` don't work as written. The one reliable
@@ -941,8 +971,7 @@ Internal loopback (`*RST; INP:TYPE GEN2`), UPL on PC COM2 at 115200.
   (`0` = exists, `-222 Data out of range` = doesn't). `MMEM:CDIR?` → `'C:\UPL\USER'` at power-up
   state — restore it after probing. No file-existence check yet.
 - **B23 path discrepancy RESOLVED:** `C:\CODED\AC3\48000` exists, `C:\UPL\AC3\48000` does not
-  (`-222`). The library is installed where `README.B23` says. `C:\UPL\REF` exists; whether
-  `FLAT_GEN.CAL` is in it is unknown (no catalog) — to be checked from the front panel.
+  (`-222`). The library is installed where `README.B23` says.
 - **`*OPT?` literal reply:** `B1(0.01),B29(2.16),B21,B22,B4,B5(1.62),B6,0,B10,0,B23,0` — the form
   with empty slots is the real one; the other transcription in this file is wrong.
 - **`diagdump` run.** Results in `results/diag_full_2026-09-23.{csv,json}` — **git-ignored** (serial +

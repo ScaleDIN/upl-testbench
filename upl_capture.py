@@ -697,9 +697,9 @@ def cmd_storetrace(upl, args):
 
     print(
         "\nNext step -- getting it to the PC (App Note 1GA42_0E):\n"
-        "  1. UPL: Display panel -> Info Text -> type the path above\n"
+        "  1. UPL: FILE panel -> Info Text (under STORE INSTRUMENT STATE) -> the path above\n"
         f"  2. PC:  python ser_in.py --port COMn out\\{_basename(args.remote)}\n"
-        "  3. UPL: OPTIONS panel -> SNDFILE\n"
+        "  3. UPL: OPTIONS panel -> Exec Macro -> SELECT -> C:\\UPL\\USER\\SNDFILE.BAS -> ENTER\n"
         "  Start the PC listener BEFORE triggering SNDFILE."
     )
     return 0

@@ -13,12 +13,15 @@ Wire protocol (confirmed from DISK2/USER/SNDFILE.BAS, firmware 3.06):
   idle timeout after the last byte arrives.
 
 Usage (manual / front-panel trigger -- the safe, well-documented path):
-  1. On the UPL: Display panel -> Info Text -> type the path of the file to send,
-     e.g.  C:\\UPL\\MYTRACE.EXP
+  1. On the UPL: FILE panel -> STORE INSTRUMENT STATE -> Info Text -> type the full
+     path of the file to send, e.g.  C:\\UPL\\MYTRACE.EXP
+     (1GA42 says "Display panel"; on firmware 3.06 it is the FILE panel field.)
   2. On this PC, start the receiver FIRST (it must be listening before you trigger
      the send):
        python ser_in.py --port COM2 out\\MYTRACE.EXP
-  3. On the UPL: OPTIONS panel -> select SNDFILE to start the transfer.
+  3. On the UPL: OPTIONS panel -> Exec Macro -> SELECT opens a file box of *.BAS
+     -> C:\\UPL\\USER\\SNDFILE.BAS -> ENTER. It runs at once.
+  Verified live 2026-09-23: 863-byte EXPort trace, identical to the SCPI readout.
   4. Watch this program; it stops automatically after the port goes idle and reports
      the byte count. Cross-check against the UPL's Info Text line, which will show
      "<n> bytes sent <filename>" or "file not found".
