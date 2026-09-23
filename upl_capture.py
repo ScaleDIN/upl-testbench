@@ -108,6 +108,65 @@ class UPL:
         self.ser.close()
 
 
+class UPLGPIB:
+    """Same interface as UPL, over IEC/IEEE-488 through a VISA library (the
+    Agilent/Keysight 82357B needs Keysight IO Libraries -- pyvisa-py cannot
+    drive it). Resource names look like GPIB0::20::INSTR; R&S examples use
+    address 20. Put the UPL in OPTIONS -> Remote via -> IEC.
+
+    With SCPI on GPIB, the UPL's COM2 is free for SNDFILE.BAS -- the setup
+    App Note 1GA42 assumes -- so no port contention and no Remote toggling."""
+
+    def __init__(self, resource, timeout=10.0):
+        import pyvisa
+        self.inst = pyvisa.ResourceManager().open_resource(resource)
+        self.inst.write_termination = "\n"
+        self.inst.read_termination = "\n"
+        self.inst.timeout = int(timeout * 1000)
+        self.inst.clear()
+
+    def write(self, cmd):
+        self.inst.write(cmd)
+
+    def query(self, cmd):
+        import pyvisa
+        try:
+            return self.inst.query(cmd).strip()
+        except pyvisa.errors.VisaIOError as e:
+            if e.error_code == pyvisa.constants.StatusCode.error_timeout:
+                raise TimeoutError(f"no reply from UPL over GPIB to {cmd!r}") from e
+            raise
+
+    def read_block(self, cmd):
+        """488.2 definite-length block. EOI ends the message on GPIB, so no LF
+        framing problem here (unlike RS-232)."""
+        self.inst.write(cmd)
+        raw = self.inst.read_raw()
+        if raw[:1] != b"#":
+            raise ValueError("expected '#' at start of block reply")
+        n = int(raw[1:2])
+        length = int(raw[2:2 + n])
+        return bytes(raw[2 + n:2 + n + length])
+
+    def set_timeout(self, seconds):
+        self.inst.timeout = int(seconds * 1000)
+
+    def drain(self, settle=0.3):
+        time.sleep(settle)
+        self.inst.clear()
+
+    def close(self):
+        self.inst.close()
+
+
+def connect(port, baud=115200, timeout=10.0):
+    """UPL over RS-232 for 'COMn' / '/dev/tty*', over GPIB for a VISA resource
+    name ('GPIB0::20::INSTR'), so every tool takes either via --port."""
+    if port.upper().startswith("GPIB"):
+        return UPLGPIB(port, timeout)
+    return UPL(port, baud, timeout)
+
+
 class DryRunUPL:
     """Offline stand-in for UPL: records every command, answers queries from a
     canned table. Lets the whole tool be exercised -- and the exact SCPI
@@ -1078,7 +1137,8 @@ def cmd_seqcheck(upl, args):
 
 def main():
     p = argparse.ArgumentParser(description="Pull data off an R&S UPL over RS232 (COM2).")
-    p.add_argument("--port", help="host serial port, e.g. COM4 or /dev/ttyUSB0 (not needed with --dry-run)")
+    p.add_argument("--port", help="serial port (COM4, /dev/ttyUSB0) or GPIB VISA resource "
+                   "(GPIB0::20::INSTR); not needed with --dry-run")
     p.add_argument("--baud", type=int, default=115200, help="must match UPL COM2 (default 115200)")
     p.add_argument("--timeout", type=float, default=10.0, help="reply timeout seconds")
     p.add_argument("--opc", action="store_true", help="use *OPC? to wait instead of a fixed delay")
@@ -1181,7 +1241,7 @@ def main():
     else:
         if not args.port:
             p.error("--port is required (or use --dry-run)")
-        upl = UPL(args.port, args.baud, args.timeout)
+        upl = connect(args.port, args.baud, args.timeout)
     try:
         return {
             "probe": cmd_probe,
