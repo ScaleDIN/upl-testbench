@@ -4,9 +4,9 @@ upl_selftest.py - remote replica of R&S's factory SELFTEST_Program.TXT (UPL-nati
 run from a PC over the RS232 remote-control link, reporting every underlying measured value
 (the front-panel BASIC version only shows a PASS/FAIL indicator per line, not the numbers).
 
-Command sequence and tolerances are copied from SELFTEST_Program.TXT (user-supplied,
-C:\\Users\\Sy Ming\\Downloads\\R&S UPL\\SELFTEST_Program.TXT) -- see CLAUDE.md for the full
-cross-reference and the run recorded on 2026-09-22 (serial 100330/6, 121/121 pass).
+Command sequence and tolerances are copied from SELFTEST_Program.TXT (user-supplied, the
+R&S factory self-test source, one directory up from this project) -- see CLAUDE.md for the
+full cross-reference and the run recorded on 2026-09-22 (serial 100330/6, 121/121 pass).
 
 Sections covered (full resolution, matching the original):
   1. Generator range control          (6 points: 30mV..20V)

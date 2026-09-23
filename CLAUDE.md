@@ -172,8 +172,8 @@ option tokens, which is now identified above — previously flagged as unknown.)
   (`SENS:FILT2:UFIL5 ON`), the filter likely also needs to be **assigned to a filter slot** via
   `SENS:FILT<i>:UFILter<n> ON` (i=slot 1‑3) to actually engage it. NOT YET CONFIRMED — try that
   assignment step next time, and/or just read §3.10.3/§2.7 in Vol.2 directly (page ~3.163 in PDF).
-  Manuals: `R&S_UPL_Audio_Analyzer_Op_Vol_1.pdf` / `_Vol_2.pdf` one level up from this folder, at
-  `C:\Users\Sy Ming\Downloads\R&S UPL\`. Vol 2 = remote/IEC‑bus command reference (confirmed).
+  Manuals: `R&S_UPL_Audio_Analyzer_Op_Vol_1.pdf` / `_Vol_2.pdf` one level up from this folder.
+  Vol 2 = remote/IEC‑bus command reference (confirmed).
   Extract text for searching with `pdftotext -layout <file> out.txt` (available in this env).
 - Unrecognized *query* names cause a read timeout (no reply); unrecognized *set* commands just queue an
   error (safe). Check/drain with `SYST:ERR?` (FIFO, one entry per query; `0,"No error"` = empty).
@@ -264,7 +264,7 @@ Subcommands: `devices`, `selftest`, `analyze <wav>`, `noise`, `tone`, `loopback`
 
 ## R&S factory Selftest program (added 2026‑09‑22) — major SCPI reference
 
-`SELFTEST_Program.TXT` (user-supplied, `C:\Users\Sy Ming\Downloads\R&S UPL\`) is a genuine R&S
+`SELFTEST_Program.TXT` (user-supplied, one directory up from this project) is a genuine R&S
 factory selftest, written in the UPL's own on-board BASIC (runs locally: `UPL OUT "cmd"` /
 `UPL IN var$` address the instrument's own SCPI parser directly, no `IEC OUT <addr>,` needed).
 Exercises generator ranges, low-dist gen accuracy, analyzer ranges (18mV–100V @ 1k/40Hz/15kHz),
@@ -603,9 +603,9 @@ a UPL frequency-response sweep at each to verify actual filter slopes match clai
 
 ## Full factory selftest, replicated via remote SCPI, with real values (2026‑09‑22)
 
-Replicated `SELFTEST_Program.TXT` (R&S factory selftest, user-supplied, at
-`C:\Users\Sy Ming\Downloads\R&S UPL\SELFTEST_Program.TXT` — untouched, never modified) command-for-
-command via remote SCPI from this PC — the front-panel version only shows pass/fail; this captures
+Replicated `SELFTEST_Program.TXT` (R&S factory selftest, user-supplied, one directory up from
+this project — untouched, never modified) command-for-command via remote SCPI from this PC —
+the front-panel version only shows pass/fail; this captures
 every underlying number. **Permanent tool: `upl_selftest.py`** (in this project folder, alongside
 `upl_capture.py`/`ser_in.py`/`audio_tests.py` — the original two prototype scripts lived only in the
 ephemeral scratchpad and were superseded/discarded).
@@ -733,9 +733,9 @@ cataloged here by topic so they're easy to pull up again if a specific need matc
 ## Manuals (added 2026‑09‑22)
 
 User placed the official operating manuals **one directory up** from this project folder:
-`C:\Users\Sy Ming\Downloads\R&S UPL\R&S_UPL_Audio_Analyzer_Op_Vol_1.pdf` and `..._Vol_2.pdf`.
+`R&S_UPL_Audio_Analyzer_Op_Vol_1.pdf` and `..._Vol_2.pdf`.
 **Vol 2 = the IEC‑bus/remote SCPI command reference** — use it to verify command syntax instead
-of blind live probing. Working directory was moved up to `C:\Users\Sy Ming\Downloads\R&S UPL`
+of blind live probing. Working directory was moved up to that parent folder
 (via change_directory) so both the manuals and `UPL_3.06/` (tools, CLAUDE.md) are reachable.
 
 ## Internal loopback self-test results (2026‑09‑22, all via upl_capture.py's UPL class over COM2)
