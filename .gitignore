@@ -11,6 +11,9 @@
 /scratchpad/*.txt
 /upl_selftest_*.txt
 
+# per-unit identity and option key (DIAG:DEV dumps) -- never push these
+/results/
+
 # python
 __pycache__/
 *.pyc

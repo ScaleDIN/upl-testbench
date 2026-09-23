@@ -521,14 +521,25 @@ def _nsweep(upl, args):
 
     # SWE1 = frequency on the X axis. SWE2 puts it on the Z axis, which leaves
     # TRAC1 empty -- that was the bug in the earlier attempt.
-    upl.write("SOUR:SWE:MODE AUTO;:SOUR:FREQ:MODE SWE1")
-    upl.write(f"SOUR:FREQ:STAR {args.start} HZ")
-    upl.write(f"SOUR:FREQ:STOP {args.stop} HZ")
-    upl.write(f"SOUR:SWE:FREQ:SPAC {'LOG' if args.spacing == 'log' else 'LIN'}")
-    upl.write(f"SOUR:SWE:FREQ:POIN {args.points}")
-    upl.write("DISP:CONF AP")
-
-    err = upl.query("SYST:ERR?")
+    # Each sweep-parameter command takes 2-3 s to process (measured live
+    # 2026-09-23). Sent back to back, the UPL drops CTS mid-line while busy and
+    # the PL2303 adapter then doubled a byte ("FREQQ", "MOODE") every run. So:
+    # one command per line, and *OPC? after each so nothing is in flight while
+    # the instrument is busy. R&S's examples use the compound form over GPIB.
+    upl.set_timeout(args.sweep_timeout)
+    try:
+        for c in ("SOUR:SWE:MODE AUTO",
+                  "SOUR:FREQ:MODE SWE1",
+                  f"SOUR:FREQ:STAR {args.start} HZ",
+                  f"SOUR:FREQ:STOP {args.stop} HZ",
+                  f"SOUR:SWE:FREQ:SPAC {'LOG' if args.spacing == 'log' else 'LIN'}",
+                  f"SOUR:SWE:FREQ:POIN {args.points}"):
+            upl.write(c)
+            upl.query("*OPC?")
+        upl.write("DISP:CONF AP")
+        err = upl.query("SYST:ERR?")
+    finally:
+        upl.set_timeout(args.timeout)
     if not err.startswith("0,"):
         print(f"WARNING: UPL reported an error after configuration: {err}", file=sys.stderr)
 
@@ -558,7 +569,9 @@ def _nsweep(upl, args):
     if args.restore:
         # Leaving the generator in sweep mode changes what a plain SOUR:FREQ does
         # afterwards -- the cleanup gotcha recorded in CLAUDE.md.
-        upl.write("SOUR:FREQ:MODE FIX;:SOUR:SWE:MODE OFF")
+        # SOUR:SWE:MODE takes only MANual|AUTO -- "OFF" is -141 (live
+        # 2026-09-23). FREQ:MODE FIX alone is what ends the sweep.
+        upl.write("SOUR:FREQ:MODE FIX")
 
     rows = max(len(freqs), len(levels), len(lev2) if lev2 else 0)
     out = open(args.output, "w") if args.output else sys.stdout
@@ -873,17 +886,23 @@ def cmd_seqcheck(upl, args):
             "FORM ASC",
             "DISP:TRAC:OPER CURV",
             "DISP:TRAC:FEED 'SENSe1:DATA1'",
-            "SOUR:SWE:MODE AUTO;:SOUR:FREQ:MODE SWE1",
+            "SOUR:SWE:MODE AUTO",
+            "SOUR:FREQ:MODE SWE1",
             "SOUR:SWE:FREQ:POIN 40",
             "DISP:CONF AP",
             "INIT:CONT OFF;*WAI",
             "TRAC:POIN? TRAC1",
             "TRAC? TRAC1",
             "TRAC? LIST1",
-            "SOUR:FREQ:MODE FIX;:SOUR:SWE:MODE OFF",
+            "SOUR:FREQ:MODE FIX",
         ],
-        forbidden=["SWE2", "FORM REAL"],
+        # compound sweep commands corrupt on the PL2303; SWE:MODE has no OFF
+        forbidden=["SWE2", "FORM REAL", "SWE:MODE OFF", "AUTO;:SOUR"],
     )
+    # every slow sweep command must be followed by *OPC? before the next write
+    i = stub.sent.index("SOUR:SWE:FREQ:POIN 40")
+    if stub.sent[i + 1] != "*OPC?":
+        failures.append("nsweep: sweep-parameter commands must each be followed by *OPC?")
     # FEED must precede the trigger, or the trace records nothing.
     if stub.sent.index("DISP:TRAC:FEED 'SENSe1:DATA1'") > stub.sent.index("INIT:CONT OFF;*WAI"):
         failures.append("nsweep: DISP:TRAC:FEED must be sent before the sweep trigger")

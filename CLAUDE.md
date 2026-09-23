@@ -599,9 +599,13 @@ inherent THD+N/DFD/noise floors, and digital audio — a goldmine of confirmed w
 *own* rear-panel serial port is always called "COM2" (that's fixed, from its OPTIONS-panel remote
 config). But which *PC* COM port that connects to depends on which USB-serial adapter is plugged
 into it, and that has changed across this session:
-- **UPL → this PC's COM7** (FTDI adapter). Baud **115200** (was 56000 earlier in the session;
+- **As of the 2026‑09‑23 evening session: UPL → this PC's COM2 (Prolific)** — the FTDI was not
+  plugged in at all (only COM2 enumerated). The DCX2496 had no link that session. The Prolific
+  **doubles a byte** when the UPL drops CTS mid-line — see "Live bring-up results" below; `nsweep`
+  now works around it, but prefer the FTDI for the UPL whenever it's available.
+- Earlier: **UPL → this PC's COM7** (FTDI adapter). Baud **115200** (was 56000 earlier in the session;
   115200 was set on the OPTIONS panel and confirmed live, and persists through a UPL restart).
-- **DCX2496 → this PC's COM2** (Prolific adapter).
+- Earlier: **DCX2496 → this PC's COM2** (Prolific adapter).
 - History: originally UPL was on the PC's COM2 (Prolific) and flaky; swapped so the more reliable
   FTDI serves the UPL (needs clean bidirectional SCPI) and the flakier Prolific serves the DCX2496
   (one-way fire-and-forget writes tolerate an occasional drop better). If ports get swapped again,
@@ -858,7 +862,8 @@ Two related facts worth keeping:
 **Implemented** in `upl_capture.py` as `read_fft()` / `fft_line_count()` and an `fft` subcommand;
 `m51_jitter_fft.py` now uses `read_fft()` and gained `--zoom` / `--center`. `seqcheck` asserts the
 paging emits `DISP:TRAC:IND 0..3` and recovers all 3744 lines from the stub instead of 1024.
-**Not yet re-run against the instrument.**
+**Verified live 2026‑09‑23 (evening)** — see "Live bring-up results" below. `m51_jitter_fft.py`
+not yet re-run.
 
 ### Bring-up checklist for the next live session (nsweep / storetrace)
 
@@ -894,14 +899,63 @@ Do these in order; each step isolates one unverified assumption.
    `m51_jitter_fft.py` and confirm a tone above 6 kHz (e.g. `--freq 10000`) now appears at all —
    under the old single-`TRAC?` readout it could not have. Then try `--zoom 8 --center 10000`.
 
-**Remember the cleanup gotcha** — `nsweep` sends `SOUR:FREQ:MODE FIX;:SOUR:SWE:MODE OFF` at the end
-by default (`--no-restore` to skip). Without it, later plain `SOUR:FREQ <f> HZ` commands silently
+**Remember the cleanup gotcha** — `nsweep` sends `SOUR:FREQ:MODE FIX` at the end by default
+(`--no-restore` to skip). Without it, later plain `SOUR:FREQ <f> HZ` commands silently
 misbehave, which would corrupt any subsequent `dcx_sweep.py` host-stepped run.
-- **Cleanup gotcha:** switching to `SOUR:FREQ:MODE SWE2` changes what plain `SOUR:FREQ <f> HZ`
-  commands do — **must explicitly send `SOUR:FREQ:MODE FIX` (and `SOUR:SWE:MODE OFF`) to return
-  to normal fixed-frequency generator behavior** before resuming manual-step sweeps, or they'll
-  silently misbehave. Done at the end of this investigation; if native sweep is revisited, remember
-  this restore step afterward too.
+**CORRECTED 2026‑09‑23 (live):** this used to say "and `SOUR:SWE:MODE OFF`". There is no such
+value — `SOUR:SWE:MODE` takes only `MANual | AUTO` (Vol.2 command table) and `OFF` is rejected
+with `-141 Invalid character data`. `SOUR:FREQ:MODE FIX` alone ends the sweep (read back `FIX`
+after an `nsweep`). Note `*RST` does **not** clear the error queue, so a stale `-141` surfaces
+one run later — use `*CLS`.
+
+### Live bring-up results, 2026‑09‑23 (evening) — nsweep, fft, storetrace, diagdump
+
+Internal loopback (`*RST; INP:TYPE GEN2`), UPL on PC COM2 at 115200.
+
+- **`nsweep` VERIFIED.** 10 pts in 4.9 s, 40 pts in 11.1 s (faster than the 16.7 s SWE2 attempt).
+  0.998–0.999 V from 20 Hz to 20 kHz, flat to ±0.05 %, correct log X axis from `TRAC? LIST1`.
+  `DISP:TRAC:FEED?` reads back `'SENS:DATA'` — quotes included, as SOUND.ASC implied. The SWE1 +
+  FEED diagnosis was right. Three bugs found and fixed on the way:
+  1. **Each sweep-parameter command (`SWE:MODE`, `FREQ:MODE`, `STAR`, `STOP`, `SPAC`, `POIN`) takes
+     2–3 s to execute.** Back to back they need ~12 s, which timed out the following `SYST:ERR?`.
+  2. **The Prolific PL2303 doubled a byte, every run, in the compound
+     `SOUR:SWE:MODE AUTO;:SOUR:FREQ:MODE SWE1`** — the UPL received `FREQQ`, `MOODE` (`-113
+     Undefined header`). Mechanism: it starts executing the slow first half, drops CTS mid-line,
+     and the adapter repeats a byte on resume. Fix in `nsweep`: one command per line, `*OPC?` after
+     each slow one. Zero errors after the fix. **General rule for this link: never send a compound
+     command whose first half is slow, and sync with `*OPC?` before the next write.** Any other
+     script sending slow commands back to back over the Prolific is exposed to the same thing.
+  3. `SOUR:SWE:MODE OFF` in the restore — see the correction above.
+- **`fft` VERIFIED — the 1024-line explanation was exactly right.** 8k unzoomed: **3744 lines,
+  4 blocks** (1024/1024/1024/672), 0–21 931.6 Hz; a 10 kHz tone found at 9996–10002 Hz, 0.968 V,
+  median line 0.36 µV (~−129 dB) — in block 1, which the old single `TRAC?` never returned.
+  Zoom 8 @ 10 kHz: **7488 lines, 8 blocks (7 × 1024 + 320)**, exactly the manual's worked example,
+  7257.8–12741.5 Hz, 0.73 Hz resolution, peak at 9997.8 Hz in block 3.
+- **`storetrace` — writes accepted, contents unverified.** `C:\UPL\ZFR40.EXP` (trace A, EXPort) and
+  `C:\UPL\ZFR40X.EXP` (X list) stored with `0,"No error"`. The long manual forms (`TRACe1`) work.
+  Verification is pending the SNDFILE transfer. `ZFR40*.EXP` are test files, safe to delete.
+- **`MMEM:CAT?` is BROKEN on this firmware — don't use it.** With a path argument → `-100 Command
+  error`. Without one → returns 1024 comma-separated numbers: the last FFT/trace block buffer, not a
+  directory listing. So `catalog` and `storetrace --verify` don't work as written. The one reliable
+  existence check found so far is for **directories**: `MMEM:CDIR '<dir>'` then `SYST:ERR?`
+  (`0` = exists, `-222 Data out of range` = doesn't). `MMEM:CDIR?` → `'C:\UPL\USER'` at power-up
+  state — restore it after probing. No file-existence check yet.
+- **B23 path discrepancy RESOLVED:** `C:\CODED\AC3\48000` exists, `C:\UPL\AC3\48000` does not
+  (`-222`). The library is installed where `README.B23` says. `C:\UPL\REF` exists; whether
+  `FLAT_GEN.CAL` is in it is unknown (no catalog) — to be checked from the front panel.
+- **`*OPT?` literal reply:** `B1(0.01),B29(2.16),B21,B22,B4,B5(1.62),B6,0,B10,0,B23,0` — the form
+  with empty slots is the real one; the other transcription in this file is wrong.
+- **`diagdump` run.** Results in `results/diag_full_2026-09-23.{csv,json}` — **git-ignored** (serial +
+  option key; the repo has a public GitHub remote). Keep a copy with the disk image.
+  - `SERN`: **4 words, `100330`, `6`, `412`, `0`**, ends with `-222` at addr 4. Words 0–1 match the
+    known serial 100330/6 — the walk works. Words 2–3 are new; meaning unknown (date code? model?).
+  - `INSTkey`: **10 words**, ends with `-222` at addr 10. The option key.
+  - **`CAGEn`, `CANLr0`, `CLDG`, `CDPHase`: all refused at the select with `-222 Data out of range`**
+    — not `-113`, so the keywords exist but a bare `DIAG:DEV <sel>` isn't enough. Likely needs a
+    table/range argument or an instrument state. Don't guess on the hardware: find the argument in
+    `UPL_UI.EXE`'s parser first. Calibration is therefore **not** backed up yet; the disk image
+    (`SETUP/CAL_*.SET`, `CAL_DIG.SAC`) remains the only copy we have.
+  - `RTEMperature` is not in the default selector list; not read.
 
 ### DCX2496 THD+N characterization, 2026‑09‑23 — "is it as bad as they say?"
 
