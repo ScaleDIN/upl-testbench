@@ -89,22 +89,41 @@ The CPU board is the **least R&S‑proprietary part** and is replaceable from th
   | Sockets | SO‑DIMM (RAM); **CompactFlash** — empty in the photo | |
   | Date codes | ST flash "0433", IDT logic "K0435M" | module built ~2004 |
 
-  **Form factor: probably ETX** (95 × 114 mm, four corner mounts, sits on a carrier). ETX modules
-  carry both PCI and ISA on their four underside connectors, which is exactly what a UPL needs. Not
-  yet confirmed — the underside wasn't photographed.
+  **Form factor: ETX — CONFIRMED from a second photo (underside + carrier, 2026‑09‑23).** Two
+  independent pieces of evidence: the module's underside has the standard ETX layout of **four
+  board-to-board connectors**, two at each end; and the carrier board is silkscreened
+  **`2094.0954.00 ETX-MODULE`** — an R&S-format part number, so R&S designed the carrier.
+  Mating connectors **X30 and X40** are visible on the carrier (the other two are out of frame).
+  In the ETX standard the four connectors split roughly as: X1 PCI/USB/audio, **X2 ISA**,
+  X3 VGA/LCD/serial/parallel/floppy/keyboard, X4 IDE/Ethernet/power control. The dedicated ISA
+  connector is why ETX suits the UPL, and why ISA-capable later ETX modules exist.
+
+  Also seen in the second photo:
+  - **CMOS/RTC battery: a Renata CR2477N lithium coin cell, on the carrier** (bottom left, in a
+    holder). This is the battery whose failure would reset the BIOS setup — see point 3 below.
+    It looks replaceable, but record the BIOS screens *before* touching it, and measure it; a
+    long-life cell, but ~20 years old.
+  - **Module underside:** Davicom **DM9102AE** 10/100 Ethernet controller (date 0417), a
+    **Xilinx** CPLD (most likely the ISA-bus glue logic), board ID "MODUL122".
+  - The Ethernet hardware exists on the module, but the UPL has no network port and its firmware
+    has no networking, so it is **not** a data-egress route as things stand. Only worth a look if
+    the carrier turns out to route those lines to a header.
 
   **What this changes for the longevity plan:**
   1. **Exact spare to hunt for:** Kontron **18003‑1280‑30‑1RS1**. A same-part NOS or pulled module
      is the zero-engineering option (plan step 2), better than "a Geode GX1 module" in general.
-  2. **If ETX is confirmed, a different ETX module on the *existing carrier* may be a lower-risk
-     fallback than the Vortex86 ISA SBC**, since the carrier and its UPL-side wiring would stay put.
-     Unverified: whether a given later ETX module keeps ISA, runs DOS, and matches ISA timing.
+  2. **ETX is confirmed, so a different ISA-capable ETX module on the *existing R&S carrier*
+     (2094.0954.00) is now the preferred fallback over the Vortex86 ISA SBC** — the carrier and all
+     its UPL-side wiring stay untouched. Per candidate module, still to verify: that it implements
+     the X2 ISA bus, boots DOS, and meets the UPL's ISA timing; and that its onboard video/IDE can
+     coexist with the mainframe's the same way the GX1's do.
   3. **The BIOS setup is state worth recording.** The module has its *own* video, IDE and floppy
      controllers (CS5530A, W83977F), while this file's architecture notes put the UPL's video, IDE
      and FDC on the mainframe. If those onboard devices are disabled in CMOS setup, a flat CMOS
      battery or a setup reset could re-enable them and collide with the mainframe's. **Photograph
      every BIOS setup screen** alongside the disk image in plan step 1. (Whether they're disabled
-     in CMOS or by hardware strapping isn't known yet.)
+     in CMOS or by hardware strapping isn't known yet.) The battery in question is now identified:
+     the Renata CR2477N on the carrier.
   4. **The CompactFlash socket:** empty in this photo. Check whether the UPL boots from a CF card
      here or from the mainframe's IDE disk — it decides what "image the boot disk" means. The
      shared Drive archive has a "CompactFlash Card" photo folder suggesting another owner moved to
@@ -149,9 +168,11 @@ The CPU board is the **least R&S‑proprietary part** and is replaceable from th
    from the mainframe IDE disk or from the module's CompactFlash socket.
 2. **Buy a NOS spare** — now specifically **Kontron 18003‑1280‑30‑1RS1** (this unit's exact
    module), or a donor UPL — zero‑engineering insurance.
-3. **Qualify a fallback.** If the module proves to be ETX, first try another ISA-capable ETX module
-   on the existing carrier; otherwise one Vortex86 ISA SBC with an FPU (DX/MX), VGA/IDE/FDC
-   disabled, as the reproducible long‑term fallback.
+3. **Qualify a fallback.** The module is confirmed ETX, so first try another ISA-capable ETX module
+   on the existing R&S carrier (2094.0954.00). Keep one Vortex86 ISA SBC with an FPU (DX/MX),
+   VGA/IDE/FDC disabled, as the second option if no suitable ETX module turns up.
+4. **Measure the CMOS battery** (Renata CR2477N on the carrier) — after step 1's BIOS photos, not
+   before.
 
 ## Installed options (confirmed by user, 2026‑09‑22) — ALL options fitted
 
