@@ -306,6 +306,12 @@ python upl_capture.py --port COM7 diagdump -o results/diag_full
 5. **Try a read-only `DIAG:DEV` dump of the per-unit state** (serial, option key, calibration
    tables) over RS-232 — see "Reading the EEPROM over RS-232" above for the rules. If it works,
    it's the no-screwdriver backup of the one chip whose contents can't be replaced.
+   **Done / superseded 2026‑09‑24:** `DIAG:DEV` gave serial + option key only (calibration
+   selectors refused), but the calibration turned out to live in **disk files**, and every file on
+   the disk was pulled over GPIB (`MMEM:DATA?`) — see "GPIB (Agilent/Keysight 82357B)". Step 1's
+   *file-level* half is therefore done too; the raw image (boot sector, partition table) and the
+   BIOS photos are still outstanding. Whether the X24164 EEPROM holds anything *not* in those
+   files is still unknown.
 6. **Keep an eye out for a donor Digital Board 1078.2708** — it covers every custom chip (the
    SERPA gate arrays and PERIF2) in one part.
 
@@ -1013,6 +1019,69 @@ Internal loopback (`*RST; INP:TYPE GEN2`), UPL on PC COM2 at 115200.
     `UPL_UI.EXE`'s parser first. Calibration is therefore **not** backed up yet; the disk image
     (`SETUP/CAL_*.SET`, `CAL_DIG.SAC`) remains the only copy we have.
   - `RTEMperature` is not in the default selector list; not read.
+
+### GPIB (Agilent/Keysight 82357B), 2026‑09‑24 — the real data-egress answer
+
+**`MMEM:DATA? '<path>'` over GPIB returns any file on the UPL's disk as a 488.2 block.** App Note
+1GA42 says UPL→PC transfer isn't supported over the bus — **wrong for firmware 3.06 over GPIB.**
+Verified: `GL_EPI.LOG`, `GLEI_RAU.BPZ` (binary), `FLAT1AC.CAL`, `FLAT_GEN.CAL`, `EANSTR.XMM` all
+byte-identical to their SNDFILE copies. **~110–150 kB/s**, vs ~11 kB/s for SNDFILE at 115 kbaud,
+with no macro, no panel steps and no COM2. **SNDFILE is retired.** (Not tried over RS‑232: there's
+no EOI there, so a binary block has no safe end marker.)
+
+Setup: Keysight IO Libraries Suite (2023 U1 worked; **needed a PC reboot** before VISA would load —
+`VI_ERROR_LIBRARY_NFOUND` until then) + `pip install pyvisa`. UPL: OPTIONS → **Remote via → IEC**,
+address **20**. Every tool takes `--port GPIB0::20::INSTR` (`upl_capture.connect()` picks serial
+or GPIB from the name).
+
+Hard-won details:
+- **No Device Clear on open.** A clear right after opening made the UPL lose the next command 2 in
+  12 (the read then times out, leaving `-420 Query UNTERMINATED`); without it 0 in 12. `connect()`
+  syncs with `*IDN?` instead, reading until the reply really is the IDN.
+- **Exception: a write that times out on open** means the UPL is still sending a reply from a
+  killed session → Device Clear, then retry. Built in.
+- **Never kill a GPIB transfer mid-block.** Stopping `gpib_backup.py` partway through a file
+  **hung UPL_UI** — serial poll still answered (STB 16/20, MAV set), but no read returned data and
+  writes timed out; Device Clear and IFC didn't recover it. **Power cycle** did.
+- **Read blocks to EOI, with the LF termchar OFF.** With it on, VISA ends each read at every 0x0A
+  in the payload: text files came in one line per read, 26.7 kB/s. Off: 113–146 kB/s.
+- A missing file → no reply (timeout) + `-200,"Execution error;Could not open file '<path>'"`;
+  the link stays usable. So names can be probed with a short timeout.
+- An occasional lone `-420` appears even from a bare VISA open/close with **no** command sent —
+  the Keysight driver addressing the device. Cosmetic.
+- **`MMEM:CAT?` is broken over GPIB too** (returns the last trace buffer), so file names come from
+  a DOS `DIR C:\ /S /A > C:\DIRLIST.TXT` (quit to DOS, run it, restart UPL) fetched over GPIB.
+- **SNDFILE via `SYST:PROG:EXEC` with Remote via IEC fails:** the manual's form needs the `.BAS`
+  extension (`'C:\UPL\USER\SNDFILE.BAS'`; the app note omits it), and even then COM2 emitted 6 zero
+  bytes and stalled → DOS "write fault" on screen, cleared by SNDFILE's own 10 s port timeout.
+  COM2 seems only set up for SNDFILE when it's the remote port. Moot now. Completion of a macro
+  is signalled by **bit 14 (RUN) of `STAT:OPER:COND?`**, not `*OPC?`.
+
+**The calibration is in disk files — and backed up.** File names came from `UPL_UI.EXE`'s strings;
+they mirror the refused `DIAG:DEV` selectors (`CAGEn`→`AGEN.CAL`, `CANLr0`→`ANLR0.CAL`,
+`CLDG`→`LDG.CAL`). In `results/CAL/` (git-ignored):
+`C:\UPL\REF\` `AGEN.CAL` 100 · `ANLR0.CAL` 740 · `LDG.CAL` 366 · `DC_OUT.CAL` 174 · `DIG.CAL` 258 ·
+`PS.CFG` · `TRCCOL.CFG` · `GL_PRO.LOG`; `C:\UPL\SETUP\` `CAL_DIG.SAC` 8657 · `CAL_LDG.SET` 84440 ·
+`UPL.SET` 89800 · `DEFAULT.SET` 89800. `LDG_ER.CAL` / `DIG_ER.CAL` (firmware also references them)
+don't exist — by name, error logs from a failed calibration.
+
+**The disk (from the DIR listing):** 2 667 entries / 2 586 files / **39.9 MB**, **2.04 GB free** — so
+**not the original 540 MB Hitachi**; replaced (CF or newer drive). **MS‑DOS 6**, volume serial
+`544F-BF04`. `DOS\`, `UPL\`, `CONFIG.SYS`, `AUTOEXEC.BAT` dated **Feb 2022** — reinstalled by a
+previous owner; R&S originals (`AUTOEXEC.UPL`, `CONFIG.UPL`, `CONFIG.IEC`…) keep 2000–01 dates.
+Biggest dirs: `C:\CODED\AC3\48000\{20_192,51_448}` (~1000 files each, the B23 library),
+`C:\DOS` 123, `C:\UPL\REF` 75, `C:\UPL\USER` 66. `C:\LOGDSP.TXT` grows at each UPL start.
+**Full file-level backup DONE → `results/DISK/`** via `scratchpad/gpib_backup.py --dirlist`:
+all 2 586 listed files, 2 583 at exactly the listed size; the other 3 are logs rewritten at UPL
+start (`C:\LOGDSP.TXT`, `C:\UPL\LOGDSP.TXT`) and `DIRLIST.TXT` itself. `manifest.csv` has SHA‑256s.
+Not a substitute for a raw image (no boot sector, no partition table), but every file.
+**Integrity check:** the instrument's `C:\CODED` vs the original B23 `CODED.zip` on the PC —
+**2 002 files in both, all byte-identical.** Disk and GPIB path both sound.
+**B23 finding:** the single-channel sets (`AC3\48000\{C,L,R,LS,RS,LFE}`, 3 files each, 18 total)
+are in the archive but those directories are **empty on the instrument** — so
+`SOUR:COD:CHAN CHL|CHC|CHR|CHLS|CHRS|CHLF` has no data here; 2/0 (`20_192`) and 5.1 (`51_448`)
+are complete. Copy the 18 files over if single-channel is ever needed. A stray `LOGDSP.TXT` in
+`51_448\` suggests the UPL writes its log into the current directory.
 
 ### DCX2496 THD+N characterization, 2026‑09‑23 — "is it as bad as they say?"
 

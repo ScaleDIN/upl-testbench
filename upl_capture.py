@@ -123,7 +123,31 @@ class UPLGPIB:
         self.inst.write_termination = "\n"
         self.inst.read_termination = "\n"
         self.inst.timeout = int(timeout * 1000)
-        self.inst.clear()
+        # No Device Clear: measured live 2026-09-24, a clear right after opening
+        # made the UPL lose the next command 2 times in 12 (the read then timed
+        # out and left -420 "Query UNTERMINATED"); without it, 0 in 12. Instead,
+        # sync with *IDN? and read until the reply really is the IDN, so a stale
+        # reply left by an earlier session can't be mistaken for an answer.
+        # Exception: if the write itself times out, the UPL is still talking --
+        # an earlier session was killed mid-reply (seen live 2026-09-24 after
+        # stopping a file backup mid-block). Only then is a Device Clear right.
+        import pyvisa
+        self.inst.timeout = 3000
+        try:
+            self.inst.write("*IDN?")
+        except pyvisa.errors.VisaIOError:
+            self.inst.clear()
+            time.sleep(1.0)
+            self.inst.write("*IDN?")
+        for _ in range(3):
+            try:
+                if "UPL" in self.inst.read():
+                    break
+            except pyvisa.errors.VisaIOError:
+                raise TimeoutError(f"UPL not answering on {resource} (Remote via IEC? address?)")
+        else:
+            raise ValueError(f"no *IDN? reply from {resource} after stale replies")
+        self.inst.timeout = int(timeout * 1000)
 
     def write(self, cmd):
         self.inst.write(cmd)
@@ -141,7 +165,13 @@ class UPLGPIB:
         """488.2 definite-length block. EOI ends the message on GPIB, so no LF
         framing problem here (unlike RS-232)."""
         self.inst.write(cmd)
-        raw = self.inst.read_raw()
+        # Read to EOI, not to LF: the payload is arbitrary bytes and can hold
+        # 0x0A (the first MMEM:DATA? test stopped at the file's own CR LF).
+        term, self.inst.read_termination = self.inst.read_termination, None
+        try:
+            raw = self.inst.read_raw()
+        finally:
+            self.inst.read_termination = term
         if raw[:1] != b"#":
             raise ValueError("expected '#' at start of block reply")
         n = int(raw[1:2])
@@ -152,8 +182,17 @@ class UPLGPIB:
         self.inst.timeout = int(seconds * 1000)
 
     def drain(self, settle=0.3):
+        """Swallow a late reply to a timed-out query (no Device Clear -- see
+        __init__)."""
+        import pyvisa
         time.sleep(settle)
-        self.inst.clear()
+        old, self.inst.timeout = self.inst.timeout, 300
+        try:
+            self.inst.read()
+        except pyvisa.errors.VisaIOError:
+            pass
+        finally:
+            self.inst.timeout = old
 
     def close(self):
         self.inst.close()
