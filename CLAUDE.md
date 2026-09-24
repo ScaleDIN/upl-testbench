@@ -129,6 +129,47 @@ Facts learned along the way:
 - **R&S-parity version live 22:30: PASS 137/137** (`results/selftest/rs_parity_20260924-223020/`), no noise
   retry needed, setup restored. B1 CH2 −0.14 to −0.19 %, B1 frequency within 0.04 %.
 
+## NAD M51 over optical, 44.1–96 kHz — first live `dac_test.py` run (2026‑09‑24, late)
+
+UPL B29 generator → **optical** → M51 (volume 0 dB) → balanced out → UPL analog analyzer, UPL on
+COM2 (Prolific) at 115200. The B29 output drives BAL, UNBAL **and optical** at once (Vol.2, OUTP2
+table), so optical needs no setting. Results in `results/dac/optical_*` and `m51_minus30_*`.
+
+| | Result |
+|---|---|
+| Lock | all four rates; locks across **±5 %** off-nominal fs (ASRC) |
+| Full scale | **4.23 V** at 0 dBFS / 0 dB volume, L−R 0.005 dB, DC < 1 mV. (The 22 Sep gain sweep's 3.77 V was at −1 dBFS: same thing.) |
+| FR | ±0.1 dB 10 Hz–20 kHz every rate; +0.21/+0.26 dB at 0.45 fs (39.7/43.2 kHz, 88.2/96k); L−R 0.01 dB |
+| THD+N −1 dBFS | −110 to −113 dB (UPL-floor limited) |
+| SINAD 0 dBFS | 104–107 dB — **< 1 dB headroom at 0 dBFS / 0 dB volume**; 6 dB worse than at −1 dBFS |
+| DR / S/N, A-wtd | **125.4 / 125.2 dB**, all rates; idle noise 2.3/2.4 µV A (3.3 µV unweighted 22k) |
+| Low-level distortion | **THD/IMD hump at −30 to −40 dBFS, H2 −73 dBc** (THD −72.5 dB at −30 dBFS). Not the analyzer: unchanged on fixed 0.6 V and 1.8 V ranges. The M51's own even-order low-level nonlinearity. |
+| IMD −3 dBFS | SMPTE −104 to −107 dB; CCIF −114 to −120 dB |
+| Crosstalk | −142 dB @1 kHz, −129 dB @16 kHz |
+| Jitter | 100 mUI injected: no sidebands, ≥44–60 dB rejection; J-test ≤ −118 dBc |
+| Filter / images | brick wall at 44.1/48 (−69 dB just above fs/2); images ≤ −86 dBc; "stopband" at 88.2/96 is the M51's rising ultrasonic noise |
+| Output | Zout 186 Ω; ultrasonic noise +33 dB (100k vs 22k BW); 19 kHz tone → H3 at 57 kHz −68 dBc (rate-independent: analog output stage), harmless in CCIF |
+
+**UPL behaviour learned (all live, all now handled in `dac_test.py`):**
+- `INP:SEL BOTH` is **digital-analyzer only** (`-222` on A22/A100) → `CH2Is1` for the analog analyzer.
+- **Filters need a function that takes them.** `SENS:FILT1:AWE ON` / `SENS:FILT OFF` are `-200` while
+  THD, selective RMS or POL is selected; and changing function (THDN → RMS) **drops** the A-weighting.
+  Select the function first, then the filter, every time.
+- **`SENS1:FUNC 'POL'` sets `DISP:TRAC:FEED 'OFF'`**, and selecting FFT afterwards doesn't restore it
+  → `TRAC:POIN? TRAC1` = 0, "No Values". Set `DISP:TRAC:FEED 'SENS:DATA'` explicitly before an FFT.
+- **Digital generator at 44.1k: DFD `SOUR:FREQ:MEAN` ≥ 19300 Hz rejected** (DIFF 1000; upper tone
+  must stay below ~19.8 kHz), and a rejected MEAN silently leaves the old one (default 12.5 kHz).
+  CCIF at 44.1k is therefore 18.5 + 19.5 kHz. 48k accepts 19 + 20.
+- **A100 can't install the selective-RMS bandpass at ≤ 53 Hz** (`111,"RMS Select bandpass is not
+  installable!"`, fine at 69 Hz). The native sweep wouldn't change that — it's the analyzer, not the
+  stepping. `fr --wide` skips A100 selective below 60 Hz; the A22 sweep covers the bottom.
+- Off-bin tones (11 025 Hz at 44.1k on the 5.86 Hz grid) leave a Blackman-Harris skirt at −92 dBc
+  out to ~60 Hz; the J-test spur search now excludes ±16 bins.
+- `fr` / `thdn` are still host-stepped (~1 s/point over serial). Porting them to the native sweep
+  (`nsweep` machinery) is the obvious speed-up, not done yet.
+- Not fixed: `multitone` lets its two lowest tones share neighbouring bins (the 1.5 dB "tone span").
+- Polarity replies `'1 FS'` on both channels; meaning still unconfirmed against the panel.
+
 ## Goal / context
 
 - The user owns a working R&S UPL audio analyzer and wants: (1) a hedge against the internal

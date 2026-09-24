@@ -67,8 +67,11 @@ Usage:
 Output: results/dac/<label>_<timestamp>/ (or --outdir) -- report.html with
 tables and graphs, one CSV per test, and summary.txt (everything printed).
 
-NOT YET RUN AGAINST HARDWARE (written 2026-09-24). Everything below is from
-Vol.2 and has never been sent to this unit:
+FIRST LIVE RUN 2026-09-24 (--source upl, NAD M51 over optical, 44.1-96 kHz): every
+test ran; the bugs it found are fixed and commented in place (INP:SEL, A-weighting
+order, trace feed after POL, CCIF at 44.1k, A100 selective floor). Still unverified
+live: --source pc, and the items below not exercised by that run. Originally from
+Vol.2, never sent to this unit before then:
   - the mixed setup, digital generator + analog analyzer (INST D48 + INST2 A22)
   - CONF:DAI HRM for 88.2/96 kHz. Vol.2 3.10.8.5 warns it also reduces
     analog-analyzer performance, so it's used only for those rates and set
@@ -412,14 +415,17 @@ class Rig:
         self.src.configure(fs, analyzer)
         # analyzer -- nothing survives an INST2 change, so all of it every time
         self.setc("INP:TYPE BAL")
-        self.setc("INP:SEL BOTH")
+        self.setc("INP:SEL CH2Is1")          # analog analyzer: BOTH is digital-only (-222)
         self.setc(f"INP:LOW {'GRO' if a.ground else 'FLO'}")
         self.setc("INP:IMP R200K")
         self.setc("SENS:VOLT:RANG:AUTO ON")
         self.setc("SENS2:FUNC 'OFF'")
         self.setc("SENS3:FUNC 'FREQ'")
-        self.setc("SENS:FILT OFF")
+        # plain RMS first: with THD, selective RMS or POL still selected, SENS:FILT OFF
+        # is rejected -200 (filters not applicable) -- harmless, but it cluttered every log
         self.func_cur = None
+        self.func("RMS")
+        self.setc("SENS:FILT OFF")
         self.fixed_sel = False
         self.state = (fs, analyzer)
         self.log(f"   INST? {self.q('INST?')!r}  INST2? {self.q('INST2?')!r}")
@@ -461,6 +467,9 @@ class Rig:
         self.setc("CALC:TRAN:FREQ:ZOOM 1")
         self.setc(f"CALC:TRAN:FREQ:AVER {avg}", quiet=True)
         self.setc("FORM ASC")
+        # Selecting FFT does not restore the trace feed: after SENS1:FUNC 'POL'
+        # it stays 'OFF' and TRAC:POIN? reads 0 (live, 2026-09-24).
+        self.setc("DISP:TRAC:FEED 'SENS:DATA'")
         self.trig()
         f, y = read_fft(self.u)
         # TRAC? is in the display unit: volts if all positive, else dBV-ish
@@ -513,6 +522,18 @@ class Rig:
 # multitone(tones, dbfs), sine() and cleanup(), plus `tracks` (can the analyzer
 # GENTrack it?) and `unsupported` (tests it cannot do).
 
+def ccif_mean(fs):
+    """CCIF mean frequency: 19.5 kHz (19 + 20 kHz), or 19 kHz (18.5 + 19.5) where the
+    UPL's digital generator can't reach 20 kHz -- at 44.1k it rejected MEAN 19300
+    and above with DIFF 1000 (live 2026-09-24)."""
+    return 19500.0 if fs >= 48000 else 19000.0
+
+
+def ccif_name(fs):
+    m = ccif_mean(fs) / 1000
+    return f"{m - 0.5:g}+{m + 0.5:g}"
+
+
 class UPLSource:
     """The UPL's digital generator (B29) into the DAC's S/PDIF/AES input."""
     name = "upl"
@@ -538,6 +559,7 @@ class UPLSource:
         r.setc("OUTP:SEL CH2Is1")              # both channels, in phase
         r.setc("SOUR:FUNC SIN", slow=True)
         self.ch, self.twin_cur = "both", None
+        self.fs = fs
 
     def tone(self, f, dbfs, ch="both"):
         r = self.rig
@@ -558,7 +580,10 @@ class UPLSource:
             # (Vol.2 3.10.1.5.5). CCIF 19 + 20 kHz as DFD mean/diff.
             setup = (("SOUR:FUNC MDIS", "SOUR:FREQ 7000 HZ", "SOUR:FREQ2 60 HZ", "SOUR:VOLT:RAT 4")
                      if kind == "SMPTE" else
-                     ("SOUR:FUNC DFD", "SOUR:FREQ:MEAN 19500 HZ", "SOUR:FREQ:DIFF 1000 HZ"))
+                     # DIFF before MEAN; at 44.1k the upper tone must stay below ~19.8 kHz
+                     # (MEAN 19500 -> -222 live), so 18.5 + 19.5 kHz there
+                     ("SOUR:FUNC DFD", "SOUR:FREQ:DIFF 1000 HZ",
+                      f"SOUR:FREQ:MEAN {ccif_mean(self.fs):.0f} HZ"))
             for c in setup:
                 r.setc(c, slow=c.startswith("SOUR:FUNC"))
             self.twin_cur = kind
@@ -904,6 +929,9 @@ def t_check(rig, a, fs, ctx):
     return [(fs, ok, fm, fs1, fs2, bal, d1, d2)]
 
 
+A100_SEL_MIN = 60.0     # Hz, lowest selective-RMS frequency on the 100 kHz analyzer
+
+
 def t_fr(rig, a, fs, ctx):
     log = rig.log
     stop = a.stop if a.stop else (0.45 * fs if a.wide else min(20000.0, 0.45 * fs))
@@ -923,6 +951,12 @@ def t_fr(rig, a, fs, ctx):
             rig.trig()
             (r1, _), (r2, _) = rig.read12()
             for f in freqs:
+                if mode == "RMSS" and analyzer == "A100" and f < A100_SEL_MIN:
+                    # A100 can't install the tracking bandpass this low: 111 "RMS Select
+                    # bandpass is not installable!" at <= 53 Hz, fine at 69 Hz (live)
+                    data[(p, mode, f)] = (None, None, None)
+                    rows.append((fs, analyzer, p + 1, mode, round(f, 2), None, None, "", "", ""))
+                    continue
                 fa = rig.tone(f, a.level)
                 time.sleep(a.settle)
                 rig.trig()
@@ -1010,8 +1044,8 @@ def t_thdn(rig, a, fs, ctx):
                     + ("  <- at/near the UPL's own floor" if at_0 is not None and at_0 < -100 else ""))
     # dynamic range (AES17): THD+N at -60 dBFS, A-weighted, + 60 dB
     rig.configure(fs, "A22")
-    rig.setc("SENS:FILT1:AWE ON")
-    rig.func("THDN")
+    rig.func("THDN")                             # function first: the previous one (THD) takes
+    rig.setc("SENS:FILT1:AWE ON")                # no weighting filter -> -200 (live 2026-09-24)
     rig.tone(997, -60.0)
     time.sleep(a.settle)
     rig.trig()
@@ -1020,7 +1054,9 @@ def t_thdn(rig, a, fs, ctx):
     # idle noise, digital silence, A-weighted
     rig.src.silence()
     time.sleep(max(a.settle, 1.0))
-    (n1, _), (n2, _) = rig.measure("RMS")
+    rig.func("RMS")
+    rig.setc("SENS:FILT1:AWE ON")                # again: the function change dropped it -- idle
+    (n1, _), (n2, _) = rig.measure("RMS")        # noise came out unweighted, S/N < DR (live)
     rig.setc("SENS:FILT OFF")
     fsv = ctx.get("fullscale", {}).get(fs, (None, None))
     snr = [db(f, n) if f and n else None for f, n in zip(fsv, (n1, n2))]
@@ -1063,9 +1099,9 @@ def t_imd(rig, a, fs, ctx):
     rig.src.twin("CCIF", a.level)
     time.sleep(a.settle)
     (v1, u1), (v2, u2) = rig.measure("DFD")
-    log(f"   CCIF 19+20 kHz  DFD ({a.level:+.0f} dBFS):    L {fmt(ratio_db(v1, u1), '%.1f')} dB  "
+    log(f"   CCIF {ccif_name(fs)} kHz DFD ({a.level:+.0f} dBFS):  L {fmt(ratio_db(v1, u1), '%.1f')} dB  "
         f"R {fmt(ratio_db(v2, u2), '%.1f')} dB")
-    rows.append((fs, "CCIF_19_20k", ratio_db(v1, u1), ratio_db(v2, u2)))
+    rows.append((fs, f"CCIF_{ccif_name(fs).replace('+', '_')}k", ratio_db(v1, u1), ratio_db(v2, u2)))
     if a.imd_fft:
         freqs, y = rig.run_fft(avg=a.fft_avg)
         fund = peak_near(freqs, y, 19000, 20)
@@ -1301,7 +1337,9 @@ def t_jtest(rig, a, fs, ctx):
                     sb.append((v, f0 + s * k * fsq))
             k += 2
         other = [db(v, fund) for f, v in zip(freqs, y)
-                 if abs(f - f0) > 6 * res and abs(f - f0) < 3000
+                 # +/-16 bins: an off-bin tone (11025 Hz at 44.1k) has a Blackman-Harris
+                 # skirt at -92 dBc out to ~60 Hz (live); still inside fs/192 = 230 Hz
+                 if abs(f - f0) > 16 * res and abs(f - f0) < 3000
                  and all(abs(f - x) > 3 * res for _, x in sb)]
         worst = max(sb) if sb else (None, None)
         log(f"   {bits}-bit J-test, tone {f0:.0f} Hz: worst jitter sideband "
@@ -1460,6 +1498,7 @@ def t_interface(rig, a, fs, ctx):
         time.sleep(a.relock)
     # 3) word length: does the DAC use bits beyond 16?
     log("   word length (THD+N at -60 dBFS, 997 Hz, A-weighted -- lower with more bits if they're used):")
+    rig.func("THDN")                             # before the filter, see t_thdn
     rig.setc("SENS:FILT1:AWE ON")
     for bits in (16, 20, 24):
         rig.setc(f"OUTP:AUD {bits}")
