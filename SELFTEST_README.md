@@ -102,6 +102,12 @@ python upl_selftest.py --port COM7 --baud 115200
 # over GPIB instead of serial (--baud is ignored)
 python upl_selftest.py --port GPIB0::20::INSTR
 
+# keep your front-panel setup: snapshot it first, load it back at the end
+python upl_selftest.py --port COM7 --preserve
+
+# no instrument: run the whole sequence against a stub and print every command
+python upl_selftest.py --dry-run
+
 # name the run (the results folder becomes results/selftest/after_recal_<timestamp>/)
 python upl_selftest.py --port COM7 --label after_recal
 
@@ -119,8 +125,10 @@ COM2 baud to match, or override with `--baud` if you're running it at something 
 
 ## What happens when you run it
 
-1. Sends `*RST` — **this clears whatever setup is currently on the UPL's screen**, exactly like
-   the front-panel self-test does. Reload your own working setup afterward if you had one loaded.
+1. Sends `*RST` (then `*CLS`) — **this clears whatever setup is currently on the UPL's screen**,
+   exactly like the front-panel self-test does. With `--preserve` the script first saves the
+   complete setup to a scratch file on the UPL (`MMEM:STOR:STAT 2`, the way R&S's own
+   `FLAT_GEN.BAS` macro does it) and loads it back at the end, so nothing is lost.
 2. Reads `*OPT?` and the unit's serial number, and works out which sections apply based on which
    options are fitted (e.g. the low-distortion-generator section is skipped if B1 isn't installed,
    the digital-audio section is skipped if no digital option is present).
@@ -155,6 +163,20 @@ COM2 baud to match, or override with `--baud` if you're running it at something 
    `results/index.html` lists every run, so successive selftests line up by date. `-o FILE` also
    copies the text report to `FILE`.
 
+6. **Leaves the UPL in a known state, even if the run fails part-way.** The generator is always
+   muted. Without `--preserve` it sends `*RST` again, so the UPL ends in its analog power-on
+   state rather than the digital `INST D48` / `INP:TYPE INT` setup of section 10. That leftover
+   digital state once made a later frequency sweep come back perfectly flat. With `--preserve`
+   your saved setup is loaded back instead. The report's "Instrument state after the run" line
+   says which.
+
+Every setting command is checked with `SYST:ERR?` as it's sent. If the UPL refuses one, the
+console shows `! rejected: <command> [<error>]` at that point, and the report lists all of them
+at the top: a reading taken after a refused setting may not mean what R&S intended. (The
+original program didn't check, and neither did this script before 2026‑09‑24.) The measurement
+commands, their order and the tolerances are exactly the R&S program's, so results compare
+directly with earlier runs and with other units' reports.
+
 Takes a few minutes end-to-end (121 readings; section 3 alone is 48 of them).
 
 ## Reading the output
@@ -181,8 +203,10 @@ script "run self-test, alert me only if something's wrong."
   into a different USB port directly on the PC rather than a hub, (3) reboot the PC, (4) in
   Device Manager, open the adapter's Properties → Power Management and untick "Allow the
   computer to turn off this device to save power" (do the same for each USB Root Hub too).
-- **`*RST` wipes your setup.** If you have a working setup loaded, save it or note it down before
-  running this, and reload it afterward.
+- **`*RST` wipes your setup** unless you use `--preserve`. `--preserve` writes one scratch file
+  on the UPL (`C:\UPL\USER\UPLTMP.SCO`, change with `--state-file`) and deletes it afterwards.
+  It hasn't been tried on the instrument yet; if the snapshot fails, the script says so, carries
+  on, and resets to the power-on state at the end instead.
 - **A "reading" of `9.93e37` (or similar absurdly large values) is the UPL's own "not available"
   sentinel**, not a real measurement — this script already filters/flags these, but if you're
   reading a report by hand, don't mistake one for an actual out-of-range value.

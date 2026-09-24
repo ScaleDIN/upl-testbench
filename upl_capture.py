@@ -542,7 +542,10 @@ class preserve_state:
 
     def __enter__(self):
         if self.enabled:
+            # *OPC? after each slow MMEM command: nothing else may be in flight while the
+            # UPL writes/loads a setup (the PL2303 byte-doubling problem, CLAUDE.md)
             self.upl.write(f"MMEM:STOR:STAT 2,'{self.path}'")
+            self.upl.query("*OPC?")
             err = self.upl.query("SYST:ERR?")
             if not err.startswith("0,"):
                 print(f"WARNING: could not snapshot instrument state ({err}); "
@@ -554,7 +557,9 @@ class preserve_state:
         if self.enabled:
             try:
                 self.upl.write(f"MMEM:LOAD:STAT 2,'{self.path}'")
+                self.upl.query("*OPC?")
                 self.upl.write(f"MMEM:DEL '{self.path}'")
+                self.upl.query("*OPC?")
             except Exception as e:      # never mask the real error
                 print(f"WARNING: failed to restore instrument state: {e}", file=sys.stderr)
         return False

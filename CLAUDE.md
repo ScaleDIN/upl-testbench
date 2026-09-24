@@ -52,6 +52,21 @@ per-section console line did its own PASS/FAIL comparison, so the 2026‑09‑22
 results were right, and those readings were all well inside their limits anyway. Fixed:
 `ok = meas <= limit`.
 
+**`upl_selftest.py` brought up to date with the later findings (same day).** Unchanged: the
+measurement commands, their order, the tolerances (checked by running the old version from git
+and the new one against the same stub: the same 399 commands in the same order, the same 121
+readings; the new one only adds the end-of-run cleanup). New: `*CLS` after `*RST`; every
+`<cmd>;*wai` from the R&S source is sent as `<cmd>` + `*OPC?` (the only compound line left is
+the `INIT:CONT OFF;*WAI` trigger, proven live in `nsweep`/`filter_test`, followed by `*OPC?`);
+`SYST:ERR?` after every setting command, with rejections printed and listed in the report
+(previously thrown away); `--preserve` (the `preserve_state` snapshot/restore); and without it,
+a closing `*RST`, so the run no longer leaves the UPL in section 10's `INST D48 / INP:TYPE INT`,
+the state that broke the first DCX sweep. Also `--dry-run`, and a fix for a crash: a sentinel
+reading made `rec()` return no deviation and the `%+.2f` log line raised a TypeError.
+`preserve_state` itself (used by `nsweep`, `fft`, `dac_test`) now does `*OPC?` after each MMEM
+command. It used to send `MMEM:DEL` straight after the slow `MMEM:LOAD:STAT`, the pattern that
+makes the PL2303 double a byte. None of this has been run on the instrument yet.
+
 ## Goal / context
 
 - The user owns a working R&S UPL audio analyzer and wants: (1) a hedge against the internal
