@@ -151,14 +151,14 @@ COM2 baud to match, or override with `--baud` if you're running it at something 
    | 7 | Inherent D2 (DFD) @10kHz/200Hz | 1 | ≤ −110dB |
    | 8 | Inherent noise, A22 | 1 | ≤ 2µV |
    | 9 | Inherent noise, A100 | 1 | ≤ 8µV |
-   | 10 | Digital audio level/freq (B29) | 3 | 0.1% / 0.01% |
+   | 10 | Digital audio (B29): level L/R, frequency, input sample rate at 48 and 44.1 kHz | 5 | 0.1% / 0.01% |
 
 4. Prints every reading live as it goes (set value, measured value, deviation, tolerance, and a
    `<-- OUT OF TOL` flag on anything that fails), then a summary listing every out-of-tolerance
    reading, then `OVERALL: PASS` or `OVERALL: FAIL`.
 5. Saves everything to a results folder, `results/selftest/<label>_<YYYYMMDD-HHMMSS>/`
    (label `selftest` unless you give `--label`; `--outdir DIR` to put it elsewhere):
-   - `report.html`: open it in a browser. The headline ("PASS: 121/121 readings within
+   - `report.html`: open it in a browser. The headline ("PASS: 124/124 readings within
      tolerance"), any out-of-tolerance readings first, then one table per section with set,
      measured, deviation, tolerance and a pass/FAIL mark on every reading.
    - `report.txt`: the same text the console showed, as the selftest has always written it.
@@ -183,7 +183,10 @@ original program didn't check, and neither did this script before 2026‑09‑24
 commands, their order and the tolerances are exactly the R&S program's, so results compare
 directly with earlier runs and with other units' reports.
 
-Takes a few minutes end-to-end (121 readings; section 3 alone is 48 of them).
+Takes a few minutes end-to-end (124 readings; section 3 alone is 48 of them). Runs before
+2026‑09‑24 had 121: section 10 recorded only the CH1 level and the frequency, and skipped the
+two sample-rate checks the R&S program makes, so it now has 5 readings instead of 2 (and the
+B1 section's frequency readings are still logged but not counted, as before).
 
 ## Reading the output
 

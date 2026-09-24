@@ -18,7 +18,8 @@ Sections covered (full resolution, matching the original):
   7. Inherent D2 (DFD) @10kHz/200Hz   (spec <= -110 dB)
   8. Inherent noise, A22              (spec <= 2 uV)
   9. Inherent noise, A100             (spec <= 8 uV)
-  10. Digital audio level/freq (B29)  -- skipped if no digital option
+  10. Digital audio (B29)             (5 points: level L/R, freq, sample rate 48k/44.1k)
+                                      -- skipped if no digital option
 
 INSTRUMENT STATE. Like the real selftest this starts with *RST, which clears whatever is
 on screen. Two ways it can end:
@@ -37,7 +38,9 @@ HOW COMMANDS ARE SENT (lessons from CLAUDE.md, applied 2026-09-24):
     and listed in the report (the original ignored them, so a rejection could skew a reading)
   - *CLS after *RST (*RST does not clear the error queue)
 The measurement commands, their order and the tolerances are unchanged, so results stay
-comparable with the 2026-09-22 run and with other units' R&S selftest reports.
+comparable with the 2026-09-22 run and with other units' R&S selftest reports. Section 10
+now also records what the R&S program checks and this script used to skip: the CH2 level and
+the input sample rate at 48 and 44.1 kHz (124 readings; runs before 2026-09-24 had 121).
 
 Usage:
   python upl_selftest.py --port COM2
@@ -55,8 +58,9 @@ it's listed there even though the Vol.2 manual's SCPI baud-set table only printe
 the front panel is correct, the manual's table was wrong/incomplete). Default here is 115200 --
 make sure the UPL's OPTIONS panel COM2 baud matches, or pass --baud to override.
 
-The --preserve snapshot/restore and the per-command error checks have not yet been run
-against the instrument (written 2026-09-24); the measurement sequence itself has (121/121).
+Live-verified 2026-09-24 (evening): --preserve (setup restored exactly, scratch file deleted),
+the per-command error checks (none rejected), sections 1-9. The new sample-rate checks in
+section 10 are dry-run only so far.
 """
 
 import argparse
@@ -393,9 +397,21 @@ class Selftest:
             w2 = parse_num(q("sens:data2?"))
             wf = parse_num(q("sens3:data?"))
             d1, _ = self.rec("Digital audio", "CH1 level", 0.5, w1, 0.1)
-            self.rec("Digital audio", "freq", 1000, wf, 0.01)
-            log("  Level CH1 %.6f FS (target 0.5, dev %s)  CH2 %.6f FS  Freq %.3f Hz (target 1000)" %
-                (w1, fp(d1), w2, wf))
+            d2, _ = self.rec("Digital audio", "CH2 level", 0.5, w2, 0.1)
+            df, _ = self.rec("Digital audio", "freq", 1000, wf, 0.01)
+            log("  Level CH1 %.6f FS (%s)  CH2 %.6f FS (%s)  Freq %.3f Hz (%s)  tol 0.1%%/0.01%%" %
+                (w1, fp(d1), w2, fp(d2), wf, fp(df)))
+            # the input sample rate, as the R&S program checks it next (lines 7420-7680):
+            # measured at the default 48 kHz, then with the generator switched to 44.1 kHz
+            cmd("SENS3:FUNC 'SFRE'")
+            for fs, setup in ((48000, []), (44100, ["INP:SAMP:FREQ:MODE AUTO", "OUTP:SAMP:MODE F44"])):
+                for c in setup:
+                    cmd(c)
+                self.trigger()
+                ws = parse_num(q("sens3:data?"))
+                ds, oks = self.rec("Digital audio", "sample rate %d" % fs, fs, ws, 0.01)
+                log("  Sample rate %.1f Hz (target %d, %s)  tol 0.01%%%s" %
+                    (ws, fs, fp(ds), "" if oks else "  <-- OUT OF TOL"))
         else:
             log("=== 10. Digital audio: SKIPPED (no digital option reported) ===")
 

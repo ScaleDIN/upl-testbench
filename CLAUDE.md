@@ -67,6 +67,59 @@ reading made `rec()` return no deviation and the `%+.2f` log line raised a TypeE
 command. It used to send `MMEM:DEL` straight after the slow `MMEM:LOAD:STAT`, the pattern that
 makes the PL2303 double a byte. None of this has been run on the instrument yet.
 
+## Digital-audio loop failure, 2026‑09‑24 (evening) — cleared by a power cycle, not a setting
+
+**First live run of the updated selftest** (`upl_selftest.py --port COM2 --preserve`, report in
+`results/selftest/live_preserve_test_20260924-215440/`): `--preserve` **verified live**: 12
+settings read back identical after the run, the error queue was empty, and the scratch `.SCO` was deleted
+(`MMEM:CHECK?` on it → `-200`). No command was rejected. Sections 1–9 passed, matching 22 Sep
+(THD+N A22 −103.5/−103.6, A100 −97.8/−97.9, D2 −129.4/−121.2 dB, noise 1.51/1.46 and 5.05/4.53 µV).
+**Section 10 (digital) failed: every reading the 9.93e37 sentinel.** The sentinel fix held (logged
+`n/a`, no crash).
+
+Diagnosis, in order:
+- A 50 s poll inside save/restore: *RST + section 10, section 8/9 leftovers + section 10, and with
+  `SENS:FUNC 'RMS'`/`SENS3:FUNC 'FREQ'` set explicitly. **Never one value** in 60 readings, while
+  every readback was right (D48/D48, INT, gen SIN 1 kHz 0.5 FS, F48/F48, no errors) and
+  `CONF:DAI?` = `BRM`. So not settle time, leftover state, or high-rate mode.
+- R&S's own `SELFTEST.BAS`, run natively (OPTIONS → Exec Macro), **failed the same way**,
+  including the sample-rate checks at 48k and 44.1k (receiver not locking at all). Its report is
+  written to `C:\UPL\USER\SELFTEST.TXT` (`OPENO# 1,"Selftest.txt"`, relative to the work dir);
+  copy in `results/selftest_native/`. The UPL's clock runs one day ahead (stamped 09-25-26).
+- `C:\LOGDSP.TXT` is a DSP command trace, unchanged since the morning backup. Not a boot/error
+  log; useless for this.
+- **The case had not been opened.** User did a power cycle with **BACKSPACE at the logo** →
+  digital works again.
+- **Was it a setting?** Today's `C:\UPL\SETUP\UPL.OLD` was rewritten at the Backspace boot and
+  holds the pre-reset RAM setup (it loads as D48/INT/AES, i.e. the state the failing native
+  selftest ended in). Loaded it (`MMEM:COPY` it to a `.SCO`, `MMEM:LOAD:STAT 2`) + *RST +
+  section 10 → **digital works, 0.49999 FS, 1000 Hz, 5/5**. The current setup was also within 65
+  bytes of it. **So not a setting in the setup file: the power cycle cleared a stuck hardware or
+  boot state on the digital side** (DSP load / B29 initialisation at startup, which `*RST` never
+  touches). Power cycle and Backspace were done together, so an OPTIONS-panel item that isn't in the
+  setup file can't be strictly excluded. **If it recurs: plain power cycle first, without Backspace**,
+  which separates the two and keeps the COM2 settings.
+
+Facts learned along the way:
+- **BACKSPACE at switch-on loads the full default setup *including the OPTIONS panel***: COM2
+  goes to **9600, 7E1** (RTS/CTS) and Remote via to IEC (Vol.1 p.2.390, Vol.2 §3.17.4, Annex A.5).
+  `*RST`, loading a setup and plain power cycles never touch COM2/Remote via. After Backspace the
+  PC gets no reply at any baud until COM2 is set back to 115200 8N1 on the panel.
+- The live setup is held in battery-backed CMOS RAM and reloaded at switch-on; `UPL.SET` is only
+  written when the program exits to DOS (or on a fatal error, with a diagnostics buffer).
+  `UPL -d` at DOS = the Backspace reset; `UPL -s<file>` boots with a given setup.
+- **`.SET` and `.SCO` are the same format** (89800 bytes, same header), so
+  `MMEM:LOAD:STAT 2` loads a `.SET` copied to a `.SCO` name. **`MMEM:COPY 'src','dst'` works**
+  (first live use). `MMEM:STOR:STAT 2` / `LOAD:STAT 2` / `MMEM:DEL` verified live.
+- A `getfile` whose request fails still leaves bytes queued if the UPL had started answering. After
+  any failed or partial block read, drain the port (read until ~5 s of silence) before trusting
+  the link. It drained 142 kB here. (The failures themselves were a shell-quoting slip on my side, `\\$f`
+  sending a literal `$f` path, not a tool fault.)
+- **Added to `upl_selftest.py` the same day:** the R&S digital subroutine's sample-rate checks
+  (`SENS3:FUNC 'SFRE'` → 48000, then `INP:SAMP:FREQ:MODE AUTO` + `OUTP:SAMP:MODE F44` → 44100,
+  ±0.01 %) plus the CH2 level, which R&S also checks. Section 10 now has 5 readings, the total
+  124 instead of 121. Dry-run only so far.
+
 ## Goal / context
 
 - The user owns a working R&S UPL audio analyzer and wants: (1) a hedge against the internal
