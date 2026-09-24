@@ -3,10 +3,12 @@
 `upl_selftest.py` is a remote replica of Rohde & Schwarz's own factory self-test
 (`SELFTEST_Program.TXT`, which runs natively on the UPL's own BASIC interpreter and only shows
 a PASS/FAIL indicator per line on the front panel). This script runs the identical command
-sequence from a PC over the remote-control link and prints **every underlying measured value**,
-plus writes a full text report you can keep and diff against future runs.
+sequence from a PC over the remote-control link and prints **every underlying measured value**.
+Each run is saved to its own folder: a browser-readable report with a pass/fail mark on every
+reading, the classic text report, and a CSV to compare against future runs. It can keep your
+front-panel setup (`--preserve`) and always leaves the UPL in a known state.
 
-This guide is self-contained — you shouldn't need anything else from this repo except the two
+This guide is self-contained — you shouldn't need anything else from this repo except the three
 files named below. Reference run: 2026-09-22, serial 100330/6, firmware 3.06 — **121/121
 readings passed**. (`CLAUDE.md`, if you have it, has the full result table to compare a new run
 against, but it isn't required to use this script.)
@@ -31,7 +33,8 @@ package — that's a different, unrelated library):
 python -m pip install pyserial
 ```
 
-Nothing else is required — no numpy, no other dependencies for this particular script. **Only if
+Nothing else is required — no numpy, no matplotlib (the selftest report has tables, no
+graphs), no other dependencies for this particular script. **Only if
 you'll connect over GPIB** instead of serial (see step 3), also install `pyvisa` plus your GPIB
 adapter's VISA library (for the Agilent/Keysight 82357B: the Keysight IO Libraries Suite, then
 reboot):
@@ -42,13 +45,16 @@ python -m pip install pyvisa
 
 ## 2. Get the files
 
-You need exactly two files, in the **same folder**:
+You need exactly three files, in the **same folder**:
 
 - `upl_selftest.py` — the script itself
-- `upl_capture.py` — supplies the serial and GPIB communication classes `upl_selftest.py` is built on
+- `upl_capture.py` — the serial and GPIB communication classes, and the setup save/restore
+  used by `--preserve`
+- `report.py` — writes the results folder and `report.html` (added 2026‑09‑24)
 
-Both are in this repository. If you only have `upl_selftest.py`, go back and grab
-`upl_capture.py` too — the script will fail to start without it (`ImportError`).
+All three are in this repository. If one is missing the script stops at once with
+"upl_capture.py and report.py must be in the same folder." Results go in a `results/` folder
+next to these files.
 
 ## 3. Hardware setup
 
