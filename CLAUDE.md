@@ -142,6 +142,7 @@ table), so optical needs no setting. Results in `results/dac/optical_*` and `m51
 | FR | ±0.1 dB 10 Hz–20 kHz every rate; +0.21/+0.26 dB at 0.45 fs (39.7/43.2 kHz, 88.2/96k); L−R 0.01 dB |
 | THD+N −1 dBFS | −110 to −113 dB (UPL-floor limited) |
 | SINAD 0 dBFS | 104–107 dB — **< 1 dB headroom at 0 dBFS / 0 dB volume**; 6 dB worse than at −1 dBFS |
+| **Volume −1 dB** (48k, 2026‑09‑25) | **M51-specific:** SINAD at 0 dBFS 104 → **109.1/110.3 dB** (clipping gone, 0 dBFS now the best level, no THD+N latch); DR 125.4 → **124.4/124.3 dB** and idle noise unchanged (2.39/2.28 µV A) ⇒ **the M51's volume is digital, ahead of a fixed output-stage noise floor**: every dB of attenuation costs a dB of DR. −1 dB is the better setting for full-scale material and measurements; full scale is then 3.77 V. Other DACs (analog volume, fixed output) won't follow this. |
 | DR / S/N, A-wtd | **125.4 / 125.2 dB**, all rates; idle noise 2.3/2.4 µV A (3.3 µV unweighted 22k) |
 | Low-level distortion | **THD/IMD hump at −30 to −40 dBFS, H2 −73 dBc** (THD −72.5 dB at −30 dBFS). Not the analyzer: unchanged on fixed 0.6 V and 1.8 V ranges. The M51's own even-order low-level nonlinearity. |
 | IMD −3 dBFS | SMPTE −104 to −107 dB; CCIF −114 to −120 dB |
