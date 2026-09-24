@@ -26,6 +26,7 @@ IMPORTANT: this runs "*RST" at the start, which clears whatever setup is current
 Usage:
   python upl_selftest.py --port COM2
   python upl_selftest.py --port COM2 --baud 19200 -o results/selftest_2026-09-22.txt
+  python upl_selftest.py --port GPIB0::20::INSTR          # over GPIB (--baud ignored)
 
 Remote-control baud: 115200 is confirmed working (set it on the UPL's OPTIONS panel, COM2 baud --
 it's listed there even though the Vol.2 manual's SCPI baud-set table only printed up to 56000;
@@ -39,7 +40,7 @@ import time
 import datetime
 
 try:
-    from upl_capture import UPL
+    from upl_capture import connect
 except ImportError:
     sys.exit("upl_capture.py must be in the same folder (it provides the UPL serial class).")
 
@@ -60,7 +61,7 @@ def is_na(v):
 
 class Selftest:
     def __init__(self, port, baud, timeout, settle):
-        self.u = UPL(port, baud, timeout)
+        self.u = connect(port, baud, timeout)
         self.settle = settle
         self.results = []
         self.log_lines = []
@@ -348,7 +349,7 @@ class Selftest:
 
 def main():
     p = argparse.ArgumentParser(description="Run the UPL factory selftest remotely and report actual values.")
-    p.add_argument("--port", required=True, help="host serial port, e.g. COM2 or COM7")
+    p.add_argument("--port", required=True, help="COMn (RS-232, e.g. COM2) or GPIB0::20::INSTR (GPIB, e.g. 82357B)")
     p.add_argument("--baud", type=int, default=115200, help="remote-control baud (115200 confirmed working; match the UPL's OPTIONS-panel COM2 setting)")
     p.add_argument("--timeout", type=float, default=12.0, help="reply timeout seconds")
     p.add_argument("--settle", type=float, default=0.4, help="extra settle time after a frequency change")

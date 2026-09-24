@@ -34,7 +34,7 @@ import sys
 import time
 
 try:
-    from upl_capture import UPL
+    from upl_capture import connect
 except ImportError:
     sys.exit("upl_capture.py must be in the same folder.")
 try:
@@ -57,7 +57,7 @@ class Sweeper:
                  gen_level=1.0, settle=0.15, points=30, fmin=20.0, fmax=20000.0):
         self.dcx = DCX2496(dcx_port, baud=dcx_baud)
         self.dcx.enable_remote()
-        self.u = UPL(upl_port, upl_baud, 12.0)
+        self.u = connect(upl_port, upl_baud, 12.0)
         self.gen_level = gen_level
         self.settle = settle
         self.freqs = np.geomspace(fmin, fmax, points)
@@ -123,7 +123,7 @@ class Sweeper:
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--dcx-port", required=True)
-    p.add_argument("--upl-port", required=True)
+    p.add_argument("--upl-port", required=True, help="UPL port: COMn (RS-232) or GPIB0::20::INSTR (GPIB, e.g. 82357B)")
     p.add_argument("--dcx-baud", type=int, default=38400)
     p.add_argument("--upl-baud", type=int, default=115200)
     p.add_argument("--out-ch", default="out1", choices=list(OUTPUT_CHANNELS))

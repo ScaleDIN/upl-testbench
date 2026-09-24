@@ -78,7 +78,7 @@ import zipfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
-from upl_capture import UPL, DryRunUPL  # noqa: E402
+from upl_capture import connect, DryRunUPL  # noqa: E402
 
 
 # --- disc knowledge, from the scanned booklet (see CLAUDE.md) ----------------
@@ -452,7 +452,7 @@ def cmd_devices(upl, args):
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--upl-port", default="COM7")
+    p.add_argument("--upl-port", default="COM7", help="UPL port: COMn (RS-232) or GPIB0::20::INSTR (GPIB, e.g. 82357B)")
     p.add_argument("--device", type=int, help="sounddevice OUTPUT index (see `devices`)")
     p.add_argument("--label", default="dut", help="tag for the CSV, e.g. m51_44k / laptop_builtin")
     p.add_argument("--zip", default=DEFAULT_ZIP, help="UPA-CD zip (tracks are read straight out of it)")
@@ -500,7 +500,7 @@ def main():
     if not args.dry_run and not args.external and args.device is None:
         raise SystemExit("--device is required (run the `devices` subcommand to find it)")
 
-    upl = DryRunUPL(echo=False) if args.dry_run else UPL(args.upl_port, timeout=args.timeout)
+    upl = DryRunUPL(echo=False) if args.dry_run else connect(args.upl_port, timeout=args.timeout)
     try:
         return {"linearity": cmd_linearity, "segments": cmd_segments}[args.cmd](upl, args)
     finally:

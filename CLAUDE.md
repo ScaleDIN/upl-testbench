@@ -1136,7 +1136,11 @@ RS‑232 lessons, each learned the hard way the same day:
 Setup: Keysight IO Libraries Suite (2023 U1 worked; **needed a PC reboot** before VISA would load —
 `VI_ERROR_LIBRARY_NFOUND` until then) + `pip install pyvisa`. UPL: OPTIONS → **Remote via → IEC**,
 address **20**. Every tool takes `--port GPIB0::20::INSTR` (`upl_capture.connect()` picks serial
-or GPIB from the name).
+or GPIB from the name). **Correction 2026‑09‑24:** that wasn't true yet — `upacd_test.py`,
+`upl_selftest.py`, `dcx_sweep.py` and the four `dcx_*` measurement scripts opened the serial class
+directly. All now use `connect()`; `COM7` stays the default, and `pyvisa` is imported only for a
+GPIB name, so serial-only setups need nothing extra. Both classes raise `TimeoutError` on a
+missing reply, so the scripts' error handling is the same either way. None re-run live since.
 
 Hard-won details:
 - **No Device Clear on open.** A clear right after opening made the UPL lose the next command 2 in

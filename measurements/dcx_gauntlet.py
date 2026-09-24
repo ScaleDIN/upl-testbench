@@ -15,7 +15,7 @@ import time
 sys.path.insert(0, "..")
 sys.path.insert(0, ".")
 import numpy as np
-from upl_capture import UPL
+from upl_capture import connect
 from dcx2496 import DCX2496, FILTER_TYPES
 
 
@@ -29,7 +29,7 @@ def parse_num(s):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--dcx-port", default="COM2")
-    p.add_argument("--upl-port", default="COM7")
+    p.add_argument("--upl-port", default="COM7", help="UPL port: COMn (RS-232) or GPIB0::20::INSTR (GPIB, e.g. 82357B)")
     p.add_argument("--out-ch", default="out1")
     p.add_argument("--hp-freq", type=float, default=500.0, help="cutoff used for the filter-type comparison")
     p.add_argument("--filter-types", default="but12,but24,bes24,lr24,but48",
@@ -42,7 +42,7 @@ def main():
     dcx = DCX2496(args.dcx_port)
     dcx.enable_remote()
 
-    u = UPL(args.upl_port, 115200, 12.0)
+    u = connect(args.upl_port, 115200, 12.0)
 
     def drain():
         for _ in range(20):

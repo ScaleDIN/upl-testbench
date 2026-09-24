@@ -71,10 +71,15 @@ python nad_m51.py --port COM2 source
 
 `upl_capture.py --help`, `dcx2496.py --help`, `nad_m51.py --help` list every subcommand.
 
-**GPIB works too.** Anything that takes a UPL `--port` also accepts a VISA name such as
-`GPIB0::20::INSTR` (tested with an Agilent/Keysight 82357B; needs the Keysight IO Libraries Suite
-and `pip install pyvisa`). On the UPL: OPTIONS → Remote via → IEC, address 20. GPIB is ~10× faster
-than RS‑232 for file transfers; see `CLAUDE.md`, "GPIB (Agilent/Keysight 82357B)", for the gotchas.
+**Serial or GPIB, chosen by the port name.** Every script's UPL port option (`--port` or
+`--upl-port`) takes either a serial port (`COM7`, the default everywhere) or a VISA name such as
+`GPIB0::20::INSTR`. No GPIB adapter is needed unless you use one: `pyvisa` is only imported when a
+GPIB name is given. GPIB was tested with an Agilent/Keysight 82357B and needs the Keysight IO
+Libraries Suite plus `pip install pyvisa`. On the UPL: OPTIONS → Remote via → IEC, address 20
+(and back to COM2 for serial). GPIB is ~10× faster than RS‑232: much quicker file transfers, and
+more readings per step in `upacd_test.py`'s continuous polling. `--baud` is ignored over GPIB. See
+`CLAUDE.md`, "GPIB (Agilent/Keysight 82357B)", for the gotchas. (`tools/sndfile_batch.py` is the
+exception: SNDFILE sends over COM2 by design.)
 
 ### Working offline (`--dry-run`)
 

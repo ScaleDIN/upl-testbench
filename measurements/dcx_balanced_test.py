@@ -23,7 +23,7 @@ import time
 sys.path.insert(0, "..")
 sys.path.insert(0, ".")
 import numpy as np
-from upl_capture import UPL
+from upl_capture import connect
 from dcx2496 import DCX2496
 
 
@@ -38,7 +38,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("mode", help="a label for this run, e.g. 'balanced' or 'single_ended'")
     p.add_argument("--dcx-port", default="COM2")
-    p.add_argument("--upl-port", default="COM7")
+    p.add_argument("--upl-port", default="COM7", help="UPL port: COMn (RS-232) or GPIB0::20::INSTR (GPIB, e.g. 82357B)")
     p.add_argument("--out-ch", default="out1")
     p.add_argument("-o", "--output", default=None, help="default: dcx_balanced_test_<mode>.json")
     args = p.parse_args()
@@ -52,7 +52,7 @@ def main():
     dcx.set_gain(ch, 0.0)
     time.sleep(0.3)
 
-    u = UPL(args.upl_port, 115200, 12.0)
+    u = connect(args.upl_port, 115200, 12.0)
 
     def drain():
         for _ in range(20):
