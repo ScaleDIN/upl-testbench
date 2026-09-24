@@ -279,8 +279,10 @@ It reports measured level and error against nominal for each step.
 **No timing assumptions.** Track 4 delimits each level step with a 3 s 2 kHz tone at 0 dBFS, so
 rather than trusting absolute offsets across USB buffering the script polls the UPL's RMS +
 frequency continuously and segments the stream by measured frequency — the track is self-indexing.
-Levels that fall below the DUT's noise floor produce no frequency lock and drop out of the results,
-which is itself a finding rather than an error.
+For `linearity` the level is **RMS selective** (a 1 % bandpass fixed at 1 kHz), so noise doesn't
+lift the bottom steps, and steps are located **by time between the high-level markers** rather than
+by frequency lock, which fails below the noise floor. Levels are referenced to the first step.
+A step buried in noise therefore still gets a reading: it just reads high, which is the result.
 
 **Bit-exact playback is mandatory.** Windows shared-mode resampling will quietly invalidate a
 −91 dBFS reading, so `linearity` refuses to run without `--exclusive` unless you pass
@@ -292,6 +294,51 @@ the whole pipeline, segmentation included, with no instrument and no audio devic
 **Level warning:** several disc tracks sit at 0 dBFS and the booklet warns they are "much higher
 than conventional program sources". Straight into the UPL analyzer that is fine; through an
 amplifier into speakers it is not. `CLAUDE.md` has the full track listing.
+
+## Test-signal files for any DAC or player (`tools/testsignals.py`)
+
+Generates a device-agnostic WAV test set, one folder per format (default **44.1/16, 48/24, 96/24,
+192/24**, ~1.2 GB total, into `testsignals/`, git-ignored). Each WAV has a JSON sidecar describing
+its exact tones, levels and segment times.
+
+```bash
+python tools/testsignals.py --list                    # plan + sizes, writes nothing
+python tools/testsignals.py                           # all four formats
+python tools/testsignals.py --formats 48000/24        # just one
+```
+
+| # | File | For |
+|---|---|---|
+| 01–04 | 1 kHz at −1 / −3 / −20 / −60 dBFS | level, max output, THD+N, AES17 dynamic range |
+| 05 | digital silence | noise floor (DACs may auto-mute on it) |
+| 06–09 | L-only / R-only, 1 kHz and octave steps | crosstalk, vs frequency |
+| 10 | 1/3-octave steps, 20 Hz … 0.465·fs | frequency response, THD vs f (>20 kHz needs `INST2 A100`) |
+| 11 | 1 kHz level staircase with 2 kHz markers, to −100 (16-bit) / −120 dBFS (24-bit) | linearity, THD+N vs level |
+| 12 / 13 | SMPTE 60 Hz + 7 kHz 4:1 / CCIF 19 + 20 kHz | IMD |
+| 14 | J-test (fs/4 + LSB square at fs/192, undithered) | jitter sidebands (zoomed FFT) |
+| 15 / 16 | fs/4 at true peak 0 / **+3 dBTP** | intersample-over headroom: compare THD+N |
+| 17 / 18 | 1 kHz square, 440 Hz half-waves | filter ringing, absolute polarity |
+
+Dithered files use ±1 LSB TPDF; 14–16 are undithered on purpose. **Several files are near or
+(16) above full scale — never with headphones plugged in or speakers connected.**
+
+`measurements/upacd_test.py` plays them with `--wav` (tones and staircase levels come from the
+sidecar), or with `--external` just listens while a player plays the file itself:
+
+```bash
+# PC plays into a DAC (M51, Elektor, NW-A306 in USB-DAC mode...)
+python measurements/upacd_test.py --upl-port COM7 --device 16 --exclusive --label m51_96k \
+    --wav testsignals/96k_24/11_level_staircase.wav linearity -o results/m51_lin_96k.csv
+# the DUT plays the copied file itself (NW-A306 file playback): press play when told
+python measurements/upacd_test.py --upl-port COM7 --external --label a306_96k \
+    --wav testsignals/96k_24/10_third_octaves_-6dBFS.wav segments -o results/a306_fr_96k.csv
+```
+
+Linearity is referenced to the staircase's first step, not the marker, so the DUT's 1 kHz-vs-2 kHz
+response cancels. Verified offline against a simulated DUT with an unknown start delay, markers
+rejected by the selective filter and no frequency lock below −90 dBFS: all 15 steps were found,
+a planted 0.5 dB error at −100 dBFS came back out, and −120 dBFS read the correct noise-limited
++0.9 dB. Not yet run live.
 
 ## NAD M51 DAC characterization
 
@@ -325,12 +372,26 @@ python measurements/m51_jitter_fft.py --fs 44100 --device 16 -o results/m51_jitt
 All M51 scripts default `--m51-port COM2 --upl-port COM7` — override if your ports differ.
 `--fs` is required on most of them (the whole point is comparing behavior across sample rates).
 
-## S/PDIF DAC characterization (`measurements/spdif_dac_test.py`)
+## DAC characterization (`measurements/dac_test.py`)
 
-For any DAC with an S/PDIF (coax/optical) or AES3 input. Unlike the M51 scripts, the **UPL's
-own digital generator (B29) is the source**: bit-exact, sample rate set by the UPL, and the
-interface can be degraded on purpose (jitter via B22, 100 m cable simulator, low signal
-voltage, off-nominal sample rate, 16/20/24-bit words).
+One test suite for any DAC, whatever its digital input. `--source` picks where the test signal
+comes from; every measurement and diagnosis is shared, so results are comparable across DACs.
+(Renamed from `spdif_dac_test.py` on 2026‑09‑24, when the PC source was added.)
+
+- **`--source upl`** (default), for an S/PDIF (coax/optical) or AES3 input: the **UPL's own
+  digital generator (B29)** is the source. It's bit-exact, the UPL sets the sample rate, and
+  the interface can be degraded on purpose (jitter via B22, 100 m cable simulator, low signal
+  voltage, off-nominal sample rate, 16/20/24-bit words).
+- **`--source pc --device N`**, for a USB DAC (NAD M51, Sony NW‑A306 in USB‑DAC mode, the
+  laptop's own output…): **this PC synthesizes each tone** and plays it through WASAPI exclusive
+  mode as exact integer samples with dither off, so it's bit-exact at the USB input too. Any
+  sample rate the device accepts works (e.g. 192000). The UPL can't GENTrack a PC, so selective
+  measurements use a FIXed bandpass that follows each tone. `jitter`, `interface` and `polarity`
+  need the UPL generator and are skipped. Give it more `--settle` (~0.5 s): a new tone only
+  arrives after the audio buffer and the DAC's own latency.
+
+A player that can only play files itself (the NW‑A306's own playback) can't be driven this way;
+use `tools/testsignals.py` + `upacd_test.py --external` for that.
 
 Physical setup: UPL digital out (BNC unbal for coax, XLR via 110→75 Ω transformer, or optical)
 → DAC input; DAC L/R analog out → UPL analyzer inputs 1/2. RCA outputs go into the XLR inputs
@@ -338,11 +399,15 @@ via adapters; the script uses `INP:LOW FLOat` (see the DCX balanced/single-ended
 `--ground` to change it.
 
 ```bash
-python measurements/spdif_dac_test.py --dry-run all                  # offline: runs everything
-python measurements/spdif_dac_test.py --port COM7 check              # lock, 0 dBFS level, balance, DC
-python measurements/spdif_dac_test.py --port COM7 fr                 # frequency response, diagnosed
-python measurements/spdif_dac_test.py --port COM7 --fs 44100 fft --images
-python measurements/spdif_dac_test.py --port COM7 --label mydac all  # the lot -- tens of minutes (untimed)
+python measurements/dac_test.py --dry-run all                  # offline: runs everything
+python measurements/dac_test.py --port COM7 check              # lock, 0 dBFS level, balance, DC
+python measurements/dac_test.py --port COM7 fr                 # frequency response, diagnosed
+python measurements/dac_test.py --port COM7 --fs 44100 fft --images
+python measurements/dac_test.py --port COM7 --label mydac all  # the lot -- tens of minutes (untimed)
+
+# USB DAC: the PC is the source (find N with `python measurements/upacd_test.py devices`)
+python measurements/dac_test.py --port COM7 --source pc --device 16 --fs 44100,96000,192000 \
+    --settle 0.6 --label m51_usb all
 ```
 
 | Test | What it answers |
@@ -376,10 +441,11 @@ crosstalk) stays comparable.
 
 88.2/96 kHz need B29's high rate mode (`CONF:DAI HRM`), which Vol.2 says also degrades the analog
 analyzer somewhat, so it's switched on only for those rates and back to `BRM` at the end. Output
-goes to `results/spdif_dac/<label>_<timestamp>/` (git-ignored): a CSV per test plus
+goes to `results/dac/<label>_<timestamp>/` (git-ignored): a CSV per test plus
 `summary.txt`. **Not yet run against hardware** — every config command is error-checked, and a
 list of anything the UPL rejected is printed at the end, so the first live `check` shows what
-needs fixing.
+needs fixing. The refactor was checked offline: `--source upl` sends the same SCPI as the old
+`spdif_dac_test.py` plus a few redundant resets, and gives identical CSVs in `--dry-run`.
 
 ## Analyzer filter checks (`measurements/filter_test.py`)
 
@@ -452,7 +518,8 @@ for when that isn't available or you want a single member on stdout.)
 |---|---|
 | top level | core control libraries (`upl_capture.py`, `dcx2496.py`, `nad_m51.py`, `ser_in.py`), `dcx_sweep.py`, `upl_selftest.py`, `audio_tests.py` |
 | `measurements/` | characterization scripts: each drives the UPL (and usually a DUT) through one test and writes CSV/JSON |
-| `tools/` | utilities: disk/file backup, SNDFILE batch transfer, LZH extraction |
+| `tools/` | utilities: disk/file backup, SNDFILE batch transfer, LZH extraction, test-signal generator |
+| `testsignals/` | generated test WAVs, **git-ignored** — rebuild with `tools/testsignals.py` |
 | `results/` | measurement output and instrument backups, **git-ignored** (it holds the serial number, option key and calibration) |
 
 ## Where things are documented

@@ -11,6 +11,9 @@
 /measurements/*.txt
 /upl_selftest_*.txt
 
+# generated test WAVs (1.2 GB) -- rebuild with `python tools/testsignals.py`
+/testsignals/
+
 # per-unit identity and option key (DIAG:DEV dumps) -- never push these
 /results/
 

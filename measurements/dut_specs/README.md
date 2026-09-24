@@ -1,6 +1,6 @@
 # DUT reference specs
 
-Optional. `spdif_dac_test.py --dut-spec <name>` loads `<name>.json` from this folder (or any
+Optional. `dac_test.py --dut-spec <name>` loads `<name>.json` from this folder (or any
 path ending in `.json`) and prints each published figure under the matching result. The test
 itself never depends on these — it is the same for every DAC.
 

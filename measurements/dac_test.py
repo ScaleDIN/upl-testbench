@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
 """
-spdif_dac_test.py - characterize an S/PDIF-input DAC with the UPL.
+dac_test.py - characterize a DAC with the UPL, whatever its digital input.
 
-Signal path:  UPL digital generator (B29)  ->  DAC S/PDIF input
-              DAC analog out (L, R)        ->  UPL analog analyzer (both channels)
+Two signal sources, one set of measurements (--source):
 
-The UPL is the source, not the laptop: bit-exact, sample rate set by the UPL,
-and the interface itself can be degraded on purpose (jitter via B22, cable
-simulator, reduced signal voltage, word length, off-nominal sample rate).
+  upl (default)  UPL digital generator (B29)  ->  DAC S/PDIF/AES input
+                 Bit-exact, sample rate set by the UPL, and the interface itself
+                 can be degraded on purpose (jitter via B22, cable simulator,
+                 reduced signal voltage, word length, off-nominal sample rate).
+  pc             this PC  --USB-->  DAC   (NAD M51, Sony NW-A306 in USB-DAC mode,
+                 laptop output, ...). Tones synthesized here and played bit-exact
+                 through WASAPI exclusive mode (--device N). jitter, interface and
+                 polarity need the UPL generator and are skipped.
+
+  In both cases:  DAC analog out (L, R)  ->  UPL analog analyzer (both channels).
+
+For a player that can only play files itself (the NW-A306's own playback), use
+tools/testsignals.py + measurements/upacd_test.py --external instead.
 
 Tests (subcommands), in the order worth running them:
   check      lock at each sample rate, full-scale output level, L/R balance, DC offset
@@ -41,12 +50,14 @@ UPL's own THD+N floor is roughly -103 to -106 dB (loopback), well above an
 APx555's, so SINAD figures beyond ~100 dB are the UPL's floor, not the DAC's.
 
 Usage:
-  python measurements/spdif_dac_test.py --dry-run all                 # offline, prints SCPI
-  python measurements/spdif_dac_test.py --port COM7 check
-  python measurements/spdif_dac_test.py --port COM7 --fs 44100,96000 fr
-  python measurements/spdif_dac_test.py --port GPIB0::20::INSTR --label mydac all
+  python measurements/dac_test.py --dry-run all                      # offline, prints SCPI
+  python measurements/dac_test.py --port COM7 check
+  python measurements/dac_test.py --port COM7 --fs 44100,96000 fr
+  python measurements/dac_test.py --port GPIB0::20::INSTR --label mydac all
+  python measurements/dac_test.py --port COM7 --source pc --device 16 --fs 48000 \
+      --settle 0.6 --label m51_usb all
 
-Output: results/spdif_dac/<label>_<timestamp>/ -- one CSV per test and
+Output: results/dac/<label>_<timestamp>/ -- one CSV per test and
 summary.txt (everything printed to the console).
 
 NOT YET RUN AGAINST HARDWARE (written 2026-09-24). Everything below is from
@@ -57,6 +68,10 @@ Vol.2 and has never been sent to this unit:
     back to BRM at the end
   - SOUR2:FUNC JITT / SOUR2:VOLT <n> UI, OUTP:SIGN:LEV, OUTP:SAMP:MODE VAL
   - SENS:VOLT:APER:MODE GENT, SENS:FREQ:MODE GENT with 'RMSS', 'POL', 'MDIS'
+  - --source pc: SENS:FREQ:MODE FIX + SENS:FREQ for selective RMS (Vol.2 p.3.114),
+    THD/THD+N/DFD/MDIS finding their frequencies from the signal (their AUTO
+    default), and the USB/WASAPI path itself. Allow extra --settle: the tone
+    only changes after the audio buffer and the DAC's own latency.
 Every config command is followed by SYST:ERR? and a rejection is printed, so the
 first live run will show exactly what this firmware accepts. Run `check` first.
 
@@ -71,6 +86,8 @@ import math
 import os
 import sys
 import time
+
+import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from upl_capture import connect, DryRunUPL, read_fft, preserve_state  # noqa: E402
@@ -177,11 +194,14 @@ def write_csv(path, header, rows, log):
 
 class Rig:
     """Thin layer over upl_capture's UPL: error-checked config writes, function
-    switching, trigger-and-read, and the digital-gen/analog-analyzer setup."""
+    switching, trigger-and-read, and the analyzer setup. Signals come from
+    self.src (UPLSource or PCSource, below)."""
 
-    def __init__(self, u, log, args):
+    def __init__(self, u, log, args, source="upl"):
         self.u, self.log, self.args = u, log, args
+        self.src = (PCSource if source == "pc" else UPLSource)(self)
         self.func_cur = None
+        self.fixed_sel = False
         self.state = None           # (fs, analyzer) currently configured
         self.rejected = []
 
@@ -221,6 +241,7 @@ class Rig:
         if name != self.func_cur:
             self.setc(f"SENS1:FUNC '{name}'", slow=True)
             self.func_cur = name
+            self.fixed_sel = False                # a new function drops the selective set-up
 
     def read12(self):
         v1, u1 = parse(self.q("SENS:DATA?"))
@@ -240,18 +261,9 @@ class Rig:
         if self.state == (fs, analyzer):
             return
         a = self.args
-        self.log(f"\n-- configure: fs={fs} Hz, analyzer={analyzer}, {a.bits}-bit")
+        self.log(f"\n-- configure: fs={fs} Hz, analyzer={analyzer}, {a.bits}-bit, source={self.src.name}")
         self.w("*CLS")
-        self.setc(f"CONF:DAI {'HRM' if fs > BRM_MAX else 'BRM'}", slow=True)
-        self.setc("INST D48", slow=True)
-        self.setc(f"INST2 {analyzer}", slow=True)
-        self.setc("SOUR:DIG:FEED ADAT")
-        self.setc(f"OUTP:SAMP:MODE {FS_MODES[fs]}", slow=True)
-        self.setc(f"OUTP:AUD {a.bits}")
-        self.setc("OUTP:DIG:CSIM OFF")
-        self.setc("SOUR2:FUNC OFF", slow=True)
-        self.setc("OUTP:SEL CH2Is1")              # both channels, in phase
-        self.setc("SOUR:FUNC SIN", slow=True)
+        self.src.configure(fs, analyzer)
         # analyzer -- nothing survives an INST2 change, so all of it every time
         self.setc("INP:TYPE BAL")
         self.setc("INP:SEL BOTH")
@@ -262,13 +274,34 @@ class Rig:
         self.setc("SENS3:FUNC 'FREQ'")
         self.setc("SENS:FILT OFF")
         self.func_cur = None
+        self.fixed_sel = False
         self.state = (fs, analyzer)
         self.log(f"   INST? {self.q('INST?')!r}  INST2? {self.q('INST2?')!r}")
         time.sleep(a.relock)                      # let the DAC lock to the new rate
 
-    def tone(self, f, dbfs):
-        self.setc(f"SOUR:FREQ {f:.4f} HZ", quiet=True)
-        self.setc(f"SOUR:VOLT {lin(dbfs):.6g} FS", quiet=True)
+    def tone(self, f, dbfs, ch="both"):
+        """Sine at f Hz, dbfs, on both channels or only "L"/"R". Returns the
+        frequency actually played (the PC source snaps it to its loop length)."""
+        f = self.src.tone(f, dbfs, ch)
+        if self.fixed_sel:                        # selective filter can't track a PC
+            self.setc(f"SENS:FREQ {f:.4f} HZ", quiet=True)
+        return f
+
+    def selective(self, band):
+        """RMSS whose bandpass follows the test tone: GENTrack for the UPL's own
+        generator, FIXed + SENS:FREQ per tone for an external (PC) source."""
+        self.func("RMSS")
+        if self.src.tracks:
+            self.setc("SENS:FREQ:MODE GENT")
+        else:
+            self.setc("SENS:FREQ:MODE FIX")
+            self.fixed_sel = True
+        self.setc(f"SENS:BAND:MODE {band}")
+
+    def aperture_follow(self):
+        """Measurement time matched to the tone: GENT if the UPL generates, else AUTO."""
+        if not (self.src.tracks and self.setc("SENS:VOLT:APER:MODE GENT")):
+            self.setc("SENS:VOLT:APER:MODE AUTO")
 
     def locked(self, f, v, vmin=1e-3):
         fm = self.freq()
@@ -321,10 +354,255 @@ class Rig:
         self.log(f"   spec: {v}")
 
     def cleanup(self):
-        self.log("\n-- cleanup: generator muted, jitter/cable sim off, base rate mode")
-        for c in ("SOUR:VOLT 0 FS", "SOUR2:FUNC OFF", "OUTP:DIG:CSIM OFF",
-                  "OUTP:SEL CH2Is1", "INP:IMP R200K", "SENS:FILT OFF", "CONF:DAI BRM"):
+        self.src.cleanup()
+        for c in ("INP:IMP R200K", "SENS:FILT OFF"):
             self.setc(c, quiet=True)
+
+
+# ---------------------------------------------------------------- signal sources
+#
+# Every test asks the rig's source for its signals; the analysis never knows which
+# one is playing. A source provides configure(fs, analyzer), tone(f, dbfs, ch),
+# silence(), twin("SMPTE"|"CCIF", dbfs), jtest(bits), noise(dbfs),
+# multitone(tones, dbfs), sine() and cleanup(), plus `tracks` (can the analyzer
+# GENTrack it?) and `unsupported` (tests it cannot do).
+
+class UPLSource:
+    """The UPL's digital generator (B29) into the DAC's S/PDIF/AES input."""
+    name = "upl"
+    tracks = True
+    unsupported = frozenset()
+    CH_SEL = {"both": "CH2Is1", "L": "CH1", "R": "CH2"}
+
+    def __init__(self, rig):
+        self.rig = rig
+        self.ch = "both"
+        self.twin_cur = None
+
+    def configure(self, fs, analyzer):
+        r, a = self.rig, self.rig.args
+        r.setc(f"CONF:DAI {'HRM' if fs > BRM_MAX else 'BRM'}", slow=True)
+        r.setc("INST D48", slow=True)
+        r.setc(f"INST2 {analyzer}", slow=True)
+        r.setc("SOUR:DIG:FEED ADAT")
+        r.setc(f"OUTP:SAMP:MODE {FS_MODES[fs]}", slow=True)
+        r.setc(f"OUTP:AUD {a.bits}")
+        r.setc("OUTP:DIG:CSIM OFF")
+        r.setc("SOUR2:FUNC OFF", slow=True)
+        r.setc("OUTP:SEL CH2Is1")              # both channels, in phase
+        r.setc("SOUR:FUNC SIN", slow=True)
+        self.ch, self.twin_cur = "both", None
+
+    def tone(self, f, dbfs, ch="both"):
+        r = self.rig
+        if ch != self.ch:
+            r.setc(f"OUTP:SEL {self.CH_SEL[ch]}")
+            self.ch = ch
+        r.setc(f"SOUR:FREQ {f:.4f} HZ", quiet=True)
+        r.setc(f"SOUR:VOLT {lin(dbfs):.6g} FS", quiet=True)
+        return f
+
+    def silence(self):
+        self.rig.setc("SOUR:VOLT 0 FS", quiet=True)
+
+    def twin(self, kind, dbfs):
+        r = self.rig
+        if kind != self.twin_cur:
+            # SMPTE: SOUR:FREQ = upper (7 kHz), SOUR:FREQ2 = lower (60 Hz), ratio LF:UF 4
+            # (Vol.2 3.10.1.5.5). CCIF 19 + 20 kHz as DFD mean/diff.
+            setup = (("SOUR:FUNC MDIS", "SOUR:FREQ 7000 HZ", "SOUR:FREQ2 60 HZ", "SOUR:VOLT:RAT 4")
+                     if kind == "SMPTE" else
+                     ("SOUR:FUNC DFD", "SOUR:FREQ:MEAN 19500 HZ", "SOUR:FREQ:DIFF 1000 HZ"))
+            for c in setup:
+                r.setc(c, slow=c.startswith("SOUR:FUNC"))
+            self.twin_cur = kind
+        r.setc(f"SOUR:VOLT:TOT {lin(dbfs):.6g} FS", quiet=True)
+
+    def jtest(self, bits):
+        r = self.rig
+        samples, peak = jtest_samples(bits)
+        body = "# J-test, 192 samples, fs/4 tone + 1 LSB square at fs/192, %d-bit\nTIMETAB_FILE\n" % bits
+        body += "\n".join("%.12f" % s for s in samples) + "\n"
+        path = f"C:\\UPL\\USER\\JTEST{bits}.TTF"
+        r.upload(path, body.encode("ascii"))
+        r.setc(f"OUTP:AUD {bits}")
+        r.setc("SOUR:FUNC ARB", slow=True)
+        r.setc(f"MMEM:LOAD:LIST ARB,'{path}'", slow=True)
+        r.setc(f"SOUR:VOLT:TOT {peak:.12f} FS")
+        self.twin_cur = None
+
+    def noise(self, dbfs):
+        r = self.rig
+        r.setc("SOUR:FUNC RAND", slow=True)
+        r.setc("SOUR:RAND:DOM TIME")
+        r.setc(f"SOUR:VOLT:TOT {lin(dbfs):.6g} FS")
+        self.twin_cur = None
+
+    def multitone(self, tones, dbfs):
+        r = self.rig
+        r.setc("SOUR:FUNC MULT", slow=True)
+        r.setc("SOUR:MULT:MODE EQU")
+        r.setc(f"SOUR:MULT:COUN {len(tones)}")
+        r.setc("SOUR:RAND:SPAC:MODE ATR")      # tones snapped to FFT bins
+        r.setc("SOUR:VOLT:CRES:MODE MIN", slow=True)
+        for i, f in enumerate(tones, 1):
+            r.setc(f"SOUR:FREQ{i} {f:.2f} HZ", quiet=True)
+        amp = 0.05
+        for _ in range(3):                     # scale per-tone level to the total peak
+            r.setc(f"SOUR:VOLT1 {amp:.6g} FS", quiet=True)
+            tot = parse(r.q("SOUR:VOLT:TOT?"))[0]
+            if not tot or tot <= 0:
+                break
+            amp = min(amp * lin(dbfs) / tot, 1.0 / len(tones))
+        self.twin_cur = None
+        return tones
+
+    def sine(self):
+        r = self.rig
+        r.setc(f"OUTP:AUD {r.args.bits}")
+        r.setc("SOUR:FUNC SIN", slow=True)
+        self.twin_cur = None
+
+    def cleanup(self):
+        self.rig.log("\n-- cleanup: generator muted, jitter/cable sim off, base rate mode")
+        for c in ("SOUR:VOLT 0 FS", "SOUR2:FUNC OFF", "OUTP:DIG:CSIM OFF",
+                  "OUTP:SEL CH2Is1", "CONF:DAI BRM"):
+            self.rig.setc(c, quiet=True)
+
+
+class PCSource:
+    """This PC plays the test signal into a USB (or any) DAC through WASAPI
+    exclusive mode, so Windows neither resamples nor mixes. Every signal is a
+    loop of exactly quantized integer samples with PortAudio's dither off, so it
+    reaches the DAC bit-exact, as the UPL's generator does -- apart from anything
+    the DAC itself does to USB audio. Tone frequencies are snapped so a whole
+    number of cycles fits the loop: 1 Hz steps (0.1 Hz below 100 Hz).
+
+    The UPL's own generator stays in its *RST (analog) state, unused and
+    unconnected. The analyzer can't GENTrack a PC, so selective RMS uses a FIXed
+    frequency set per tone, and the aperture uses AUTO."""
+    name = "pc"
+    tracks = False
+    unsupported = frozenset({"jitter", "interface", "polarity"})   # need the UPL generator
+
+    def __init__(self, rig):
+        import threading
+        self.rig = rig
+        self.a = rig.args
+        self.fs = None
+        self.stream = None
+        self.buf = None
+        self.pos = 0
+        self.lock = threading.Lock()
+
+    # --- audio plumbing
+    def configure(self, fs, analyzer):
+        r = self.rig
+        r.setc(f"INST2 {analyzer}", slow=True)
+        if fs == self.fs:
+            return
+        self.close()
+        self.fs = fs
+        self.buf = np.zeros((fs, 2), dtype=np.int32)
+        self.pos = 0
+        if self.a.dry_run:
+            r.log(f"   (dry run: would open device {self.a.device} at {fs} Hz, "
+                  f"{'shared' if self.a.shared else 'WASAPI exclusive'})")
+            return
+        import sounddevice as sd
+        extra = None if self.a.shared else sd.WasapiSettings(exclusive=True)
+        self.stream = sd.OutputStream(samplerate=fs, device=self.a.device, channels=2,
+                                      dtype="int32", callback=self._cb, dither_off=True,
+                                      extra_settings=extra)
+        self.stream.start()
+        r.log(f"   PC output: device {self.a.device}, {fs} Hz, {self.a.bits}-bit words, "
+              f"{'shared (resampled!)' if self.a.shared else 'WASAPI exclusive'}, "
+              f"latency {self.stream.latency * 1000:.0f} ms")
+
+    def _cb(self, out, frames, time_info, status):
+        with self.lock:
+            buf, n = self.buf, len(self.buf)
+            i = 0
+            while i < frames:
+                k = min(frames - i, n - self.pos)
+                out[i:i + k] = buf[self.pos:self.pos + k]
+                i += k
+                self.pos = (self.pos + k) % n
+
+    def play(self, x, desc):
+        """x: floats, 1.0 = full-scale peak, shape (n,) or (n, 2); looped."""
+        if x.ndim == 1:
+            x = np.column_stack([x, x])
+        top = 2 ** (self.a.bits - 1) - 1
+        self.set_codes(np.clip(np.round(x * top), -top - 1, top).astype(np.int64), desc)
+
+    def set_codes(self, codes, desc, bits=None):
+        """Integer codes at `bits` (default --bits), MSB-aligned into the int32 stream."""
+        bits = bits or self.a.bits
+        shifted = (np.asarray(codes, dtype=np.int64) << (32 - bits)).astype(np.int32)
+        with self.lock:
+            self.buf, self.pos = shifted, 0
+        if self.a.dry_run:
+            self.rig.log(f"   [pc] {desc}")
+
+    def close(self):
+        if self.stream is not None:
+            self.stream.stop()
+            self.stream.close()
+            self.stream = None
+
+    def _t(self, seconds):
+        return np.arange(int(round(seconds * self.fs))) / self.fs
+
+    # --- signals
+    def tone(self, f, dbfs, ch="both"):
+        per = 10.0 if f < 100 else 1.0              # loop length, s
+        f = round(f * per) / per
+        x = lin(dbfs) * np.sin(2 * math.pi * f * self._t(per))
+        z = np.zeros_like(x)
+        self.play(np.column_stack([x if ch != "R" else z, x if ch != "L" else z]),
+                  f"tone {f:g} Hz {dbfs:+.1f} dBFS {ch}")
+        return f
+
+    def silence(self):
+        self.set_codes(np.zeros((self.fs, 2), dtype=np.int64), "digital silence")
+
+    def twin(self, kind, dbfs):
+        t, pk = self._t(1.0), lin(dbfs)
+        if kind == "SMPTE":                          # 60 Hz + 7 kHz, 4:1
+            x = pk * (0.8 * np.sin(2 * math.pi * 60 * t) + 0.2 * np.sin(2 * math.pi * 7000 * t))
+        else:                                        # CCIF 19 + 20 kHz, 1:1
+            x = pk * 0.5 * (np.sin(2 * math.pi * 19000 * t) + np.sin(2 * math.pi * 20000 * t))
+        self.play(x, f"{kind} twin tone {dbfs:+.1f} dBFS")
+
+    def jtest(self, bits):
+        """The samples of jtest_samples(), as exact codes: tone at +/-0.5 FS (45 deg,
+        so -3 dBFS peak) plus 1 LSB for the first 96 of every 192 samples."""
+        half = 2 ** (bits - 2)
+        tone = np.array([half, half, -half, -half] * 48, dtype=np.int64)
+        tone[:96] += 1
+        self.set_codes(np.column_stack([tone, tone]), f"J-test {bits}-bit", bits=bits)
+
+    def noise(self, dbfs):
+        x = np.random.default_rng(1).standard_normal((2 * self.fs, 2))
+        self.play(lin(dbfs) * x / np.abs(x).max(), f"white noise, peak {dbfs:+.1f} dBFS")
+
+    def multitone(self, tones, dbfs):
+        """Integer-Hz tones in a 1 s loop, Schroeder phases for a low crest factor.
+        Unlike the UPL's ATRack spacing they aren't on FFT bins, so the
+        Blackman-Harris window's skirts set the floor between tones."""
+        tones = sorted({max(1, round(f)) for f in tones})
+        t, n = self._t(1.0), len(tones)
+        x = sum(np.sin(2 * math.pi * f * t - math.pi * k * (k - 1) / n) for k, f in enumerate(tones))
+        self.play(lin(dbfs) * x / np.abs(x).max(), f"{n}-tone multisine, peak {dbfs:+.1f} dBFS")
+        return tones
+
+    def sine(self):
+        pass
+
+    def cleanup(self):
+        self.rig.log("\n-- cleanup: PC output stopped")
+        self.close()
 
 
 # ---------------------------------------------------------------- spectrum analysis
@@ -409,29 +687,28 @@ def t_fr(rig, a, fs, ctx):
     stop = a.stop if a.stop else (0.45 * fs if a.wide else min(20000.0, 0.45 * fs))
     analyzer = "A100" if (a.wide or stop > 21000) else "A22"
     rig.configure(fs, analyzer)
-    if not rig.setc("SENS:VOLT:APER:MODE GENT"):
-        rig.setc("SENS:VOLT:APER:MODE AUTO")
+    rig.aperture_follow()
     freqs = geomspace(a.start, stop, a.points)
     rows, data = [], {}
     for p in range(a.repeat):
         for mode in ("RMS", "RMSS"):
-            rig.func(mode)
             if mode == "RMSS":
-                rig.setc("SENS:FREQ:MODE GENT")
-                rig.setc("SENS:BAND:MODE PTOC")   # 1/3-octave bandpass that follows the generator
+                rig.selective("PTOC")             # 1/3-octave bandpass that follows the tone
+            else:
+                rig.func(mode)
             rig.tone(997, a.level)
             time.sleep(a.settle)
             rig.trig()
             (r1, _), (r2, _) = rig.read12()
             for f in freqs:
-                rig.tone(f, a.level)
+                fa = rig.tone(f, a.level)
                 time.sleep(a.settle)
                 rig.trig()
                 (v1, _), (v2, _) = rig.read12()
                 d1, d2 = db(v1, r1), db(v2, r2)
                 lr = db(v1, v2) if v1 and v2 else None
                 data[(p, mode, f)] = (d1, d2, lr)
-                rows.append((fs, analyzer, p + 1, mode, round(f, 2), v1, v2,
+                rows.append((fs, analyzer, p + 1, mode, round(fa, 2), v1, v2,
                              fmt(d1, "%.3f", ""), fmt(d2, "%.3f", ""), fmt(lr, "%.3f", "")))
             log(f"   pass {p+1} {mode:<4s} done  (ref 997 Hz: L {fmt(r1, '%.4f')} V, R {fmt(r2, '%.4f')} V)")
 
@@ -519,7 +796,7 @@ def t_thdn(rig, a, fs, ctx):
     (v1, u1), (v2, u2) = rig.read12()
     dr = [None if ratio_db(v, u) is None else 60.0 - ratio_db(v, u) for v, u in ((v1, u1), (v2, u2))]
     # idle noise, digital silence, A-weighted
-    rig.setc("SOUR:VOLT 0 FS", quiet=True)
+    rig.src.silence()
     time.sleep(max(a.settle, 1.0))
     (n1, _), (n2, _) = rig.measure("RMS")
     rig.setc("SENS:FILT OFF")
@@ -554,21 +831,14 @@ def t_imd(rig, a, fs, ctx):
     log = rig.log
     rig.configure(fs)
     rows = []
-    lvl = lin(a.level)
-    # SMPTE: SOUR:FREQ = upper (7 kHz), SOUR:FREQ2 = lower (60 Hz), ratio LF:UF 4 (Vol.2 3.10.1.5.5)
-    for c in ("SOUR:FUNC MDIS", "SOUR:FREQ 7000 HZ", "SOUR:FREQ2 60 HZ", "SOUR:VOLT:RAT 4",
-              f"SOUR:VOLT:TOT {lvl:.6g} FS"):
-        rig.setc(c, slow=c.startswith("SOUR:FUNC"))
+    rig.src.twin("SMPTE", a.level)
     time.sleep(a.settle)
     (v1, u1), (v2, u2) = rig.measure("MDIS")
     log(f"   SMPTE 60 Hz + 7 kHz 4:1 ({a.level:+.0f} dBFS): L {fmt(ratio_db(v1, u1), '%.1f')} dB  "
         f"R {fmt(ratio_db(v2, u2), '%.1f')} dB")
     rows.append((fs, "SMPTE_60_7k", ratio_db(v1, u1), ratio_db(v2, u2)))
     rig.spec("imd")
-    # CCIF twin tone 19 + 20 kHz as DFD mean/diff
-    for c in ("SOUR:FUNC DFD", "SOUR:FREQ:MEAN 19500 HZ", "SOUR:FREQ:DIFF 1000 HZ",
-              f"SOUR:VOLT:TOT {lvl:.6g} FS"):
-        rig.setc(c, slow=c.startswith("SOUR:FUNC"))
+    rig.src.twin("CCIF", a.level)
     time.sleep(a.settle)
     (v1, u1), (v2, u2) = rig.measure("DFD")
     log(f"   CCIF 19+20 kHz  DFD ({a.level:+.0f} dBFS):    L {fmt(ratio_db(v1, u1), '%.1f')} dB  "
@@ -581,29 +851,26 @@ def t_imd(rig, a, fs, ctx):
             if freqs and fx < freqs[-1]:
                 log(f"     CCIF product/alias at {fx:.0f} Hz: "
                     f"{fmt(db(peak_near(freqs, y, fx, 15), fund), '%.1f')} dBc")
-    rig.setc("SOUR:FUNC SIN", slow=True)
+    rig.src.sine()
     return rows
 
 
 def t_xtalk(rig, a, fs, ctx):
     log = rig.log
     rig.configure(fs)
-    rig.func("RMSS")
-    rig.setc("SENS:FREQ:MODE GENT")
-    rig.setc("SENS:BAND:MODE PTOC")
+    rig.selective("PTOC")
     rows = []
     for f in (100.0, 1000.0, 10000.0, min(16000.0, 0.4 * fs)):
         res = []
-        for sel in ("CH1", "CH2"):
-            rig.setc(f"OUTP:SEL {sel}")
-            rig.tone(f, -1.0)
+        for ch in ("L", "R"):
+            f = rig.tone(f, -1.0, ch)
             time.sleep(a.settle)
             rig.trig()
             (v1, _), (v2, _) = rig.read12()
-            res.append(db(v2, v1) if sel == "CH1" else db(v1, v2))
+            res.append(db(v2, v1) if ch == "L" else db(v1, v2))
         rows.append((fs, f, res[0], res[1]))
         log(f"   {f:7.0f} Hz: L->R {fmt(res[0], '%.1f')} dB   R->L {fmt(res[1], '%.1f')} dB")
-    rig.setc("OUTP:SEL CH2Is1")
+    rig.tone(997, -1.0)                           # back to both channels
     rig.spec("xtalk")
     return rows
 
@@ -621,7 +888,7 @@ def t_stability(rig, a, fs, ctx):
     idle = {}
     for analyzer in ("A22", "A100"):
         rig.configure(fs, analyzer)
-        rig.setc("SOUR:VOLT 0 FS", quiet=True)
+        rig.src.silence()
         time.sleep(max(a.settle, 1.0))
         (n1, _), (n2, _) = rig.measure("RMS")
         idle[analyzer] = (n1, n2)
@@ -796,15 +1063,7 @@ def t_jtest(rig, a, fs, ctx):
     f0, fsq = fs / 4.0, fs / 192.0
     for bits in a.jbits:
         rig.configure(fs)
-        samples, peak = jtest_samples(bits)
-        body = "# J-test, 192 samples, fs/4 tone + 1 LSB square at fs/192, %d-bit\nTIMETAB_FILE\n" % bits
-        body += "\n".join("%.12f" % s for s in samples) + "\n"
-        path = f"C:\\UPL\\USER\\JTEST{bits}.TTF"
-        rig.upload(path, body.encode("ascii"))
-        rig.setc(f"OUTP:AUD {bits}")
-        rig.setc("SOUR:FUNC ARB", slow=True)
-        rig.setc(f"MMEM:LOAD:LIST ARB,'{path}'", slow=True)
-        rig.setc(f"SOUR:VOLT:TOT {peak:.12f} FS")
+        rig.src.jtest(bits)
         time.sleep(a.relock)
         freqs, y = rig.run_fft(avg=a.fft_avg)
         if not freqs:
@@ -827,10 +1086,10 @@ def t_jtest(rig, a, fs, ctx):
             f"{fmt(worst[0], '%.1f')} dBc at {fmt(worst[1], '%.0f')} Hz; "
             f"worst other spur within 3 kHz {fmt(max([o for o in other if o is not None], default=None), '%.1f')} dBc")
         rows += [(fs, bits, round(f, 3), v) for f, v in zip(freqs, y)]
-    rig.setc(f"OUTP:AUD {a.bits}")
-    rig.setc("SOUR:FUNC SIN", slow=True)
-    log("   (bit-exactness of the ARB playback is unverified: loop the UPL digital out into its own"
-        " digital in once and check the fs/192 lines are there at the 1-LSB level)")
+    rig.src.sine()
+    if rig.src.name == "upl":
+        log("   (bit-exactness of the ARB playback is unverified: loop the UPL digital out into its own"
+            " digital in once and check the fs/192 lines are there at the 1-LSB level)")
     return rows
 
 
@@ -842,21 +1101,7 @@ def t_multitone(rig, a, fs, ctx):
     rig.configure(fs)
     rig.func("FFT")
     rig.setc("CALC:TRAN:FREQ:FFT S8K")
-    rig.setc("SOUR:FUNC MULT", slow=True)
-    rig.setc("SOUR:MULT:MODE EQU")
-    rig.setc("SOUR:MULT:COUN 17")
-    rig.setc("SOUR:RAND:SPAC:MODE ATR")
-    rig.setc("SOUR:VOLT:CRES:MODE MIN", slow=True)
-    tones = geomspace(20.0, min(20000.0, 0.45 * fs), 17)
-    for i, f in enumerate(tones, 1):
-        rig.setc(f"SOUR:FREQ{i} {f:.2f} HZ", quiet=True)
-    amp = 0.05
-    for _ in range(3):                       # scale per-tone level to --level total peak
-        rig.setc(f"SOUR:VOLT1 {amp:.6g} FS", quiet=True)
-        tot = parse(rig.q("SOUR:VOLT:TOT?"))[0]
-        if not tot or tot <= 0:
-            break
-        amp = min(amp * lin(a.mt_level) / tot, 1.0 / 17)
+    tones = rig.src.multitone(geomspace(20.0, min(20000.0, 0.45 * fs), 17), a.mt_level)
     time.sleep(a.settle)
     freqs, y = rig.run_fft(avg=a.fft_avg)
     rows = [(fs, round(f, 3), v) for f, v in zip(freqs, y)]
@@ -876,7 +1121,7 @@ def t_multitone(rig, a, fs, ctx):
             log(f"   multitone ({a.mt_level:+.0f} dBFS peak): tones span "
                 f"{fmt(db(min(v for v, _ in found), ref), '%.2f')} dB; worst product between tones "
                 f"{fmt(db(wv, ref), '%.1f')} dBc at {wf:.0f} Hz; median floor {fmt(db(med, ref), '%.1f')} dBc")
-    rig.setc("SOUR:FUNC SIN", slow=True)
+    rig.src.sine()
     return rows
 
 
@@ -885,9 +1130,7 @@ def t_linearity(rig, a, fs, ctx):
     997 Hz) so noise doesn't lift the low end. 24-bit words, no dither needed."""
     log = rig.log
     rig.configure(fs)
-    rig.func("RMSS")
-    rig.setc("SENS:FREQ:MODE GENT")
-    rig.setc("SENS:BAND:MODE PPCT1")
+    rig.selective("PPCT1")
     rows, ref = [], [None, None]
     for L in range(0, -131, -10):
         rig.tone(997, float(L))
@@ -912,15 +1155,12 @@ def t_imd_level(rig, a, fs, ctx):
     rig.configure(fs)
     rows = []
     levels = [-60, -50, -40, -30, -20, -12, -9, -6, -3, -1, 0]
-    for name, setup, fn in (
-            ("SMPTE", ("SOUR:FUNC MDIS", "SOUR:FREQ 7000 HZ", "SOUR:FREQ2 60 HZ", "SOUR:VOLT:RAT 4"), "MDIS"),
-            ("CCIF", ("SOUR:FUNC DFD", "SOUR:FREQ:MEAN 19500 HZ", "SOUR:FREQ:DIFF 1000 HZ"), "DFD")):
-        for c in setup:
-            rig.setc(c, slow=c.startswith("SOUR:FUNC"))
+    for name, fn in (("SMPTE", "MDIS"), ("CCIF", "DFD")):
+        rig.src.twin(name, levels[0])
         rig.func(fn)
         res = []
         for L in levels:
-            rig.setc(f"SOUR:VOLT:TOT {lin(L):.6g} FS", quiet=True)
+            rig.src.twin(name, L)
             time.sleep(a.settle)
             rig.trig()
             (v1, u1), (v2, u2) = rig.read12()
@@ -931,7 +1171,7 @@ def t_imd_level(rig, a, fs, ctx):
         log(f"   {name}: best {fmt(best[0], '%.1f')} dB at {fmt(best[1], '%+.0f')} dBFS; "
             f"at 0 dBFS {fmt(res[-1][1][0], '%.1f')} dB (L)")
         rig.func_cur = None
-    rig.setc("SOUR:FUNC SIN", slow=True)
+    rig.src.sine()
     return rows
 
 
@@ -941,9 +1181,7 @@ def t_filter(rig, a, fs, ctx):
     much of the image band gets through."""
     log = rig.log
     rig.configure(fs, "A100")
-    rig.setc("SOUR:FUNC RAND", slow=True)
-    rig.setc("SOUR:RAND:DOM TIME")
-    rig.setc(f"SOUR:VOLT:TOT {lin(-6.0):.6g} FS")
+    rig.src.noise(-6.0)
     time.sleep(a.settle)
     freqs, y = rig.run_fft(avg=max(a.fft_avg, 16))
     rows = [(fs, round(f, 3), v) for f, v in zip(freqs, y)]
@@ -959,7 +1197,7 @@ def t_filter(rig, a, fs, ctx):
             f"{lo:.2f}-{hi:.2f}fs {fmt(db(band(lo * fs, hi * fs), ref), '%.1f')} dB"
             for lo, hi in pts if hi * fs < (freqs[-1] if freqs else 0)))
         log("   (a brick-wall filter is ~-100 dB by 0.55 fs; NOS/filterless DACs stay near 0 dB)")
-    rig.setc("SOUR:FUNC SIN", slow=True)
+    rig.src.sine()
     return rows
 
 
@@ -1051,6 +1289,9 @@ ALL_PLAN = [
 def run(rig, a, outdir, log):
     """A single test at every --fs."""
     name = "images" if (a.test == "fft" and a.images) else a.test
+    if name in rig.src.unsupported:
+        log(f"\n=== {name}: needs the UPL's own generator (--source upl); skipped ===")
+        return
     fn, header = TESTS[name]
     ctx, rows = {}, []
     for fs in a.fs:
@@ -1065,8 +1306,15 @@ def main():
     p.add_argument("--baud", type=int, default=115200)
     p.add_argument("--timeout", type=float, default=30.0)
     p.add_argument("--dry-run", action="store_true", help="no instrument; print the SCPI")
+    p.add_argument("--source", choices=("upl", "pc"), default="upl",
+                   help="upl: the UPL's digital generator into an S/PDIF/AES input (default); "
+                        "pc: this PC plays the tones into a USB (or any) DAC")
+    p.add_argument("--device", type=int,
+                   help="--source pc: sounddevice output index (upacd_test.py devices lists them)")
+    p.add_argument("--shared", action="store_true",
+                   help="--source pc: allow Windows shared mode (resampled -- results suspect)")
     p.add_argument("--fs", default="44100,48000,88200,96000",
-                   help="comma-separated sample rates (44100,48000,88200,96000)")
+                   help="comma-separated sample rates; --source upl supports 44100,48000,88200,96000")
     p.add_argument("--bits", type=int, default=24, help="word length sent to the DAC (OUTP:AUD)")
     p.add_argument("--ground", action="store_true", help="INP:LOW GRO instead of FLOat")
     p.add_argument("--settle", type=float, default=0.3, help="seconds after each generator change")
@@ -1128,8 +1376,10 @@ def main():
     a = p.parse_args()
     a.fs = [int(x) for x in a.fs.split(",")]
     for f in a.fs:
-        if f not in FS_MODES:
-            p.error(f"--fs {f}: supported {sorted(FS_MODES)}")
+        if a.source == "upl" and f not in FS_MODES:
+            p.error(f"--fs {f}: the UPL generator supports {sorted(FS_MODES)}")
+    if a.source == "pc" and not a.dry_run and a.device is None:
+        p.error("--source pc needs --device (python measurements/upacd_test.py devices)")
     # defaults for options that only some subcommands define (so `all` works)
     defaults = dict(start=10.0, stop=None, points=31, level=None, repeat=2, wide=False,
                     analyzer="A22", freq_level=-1.0, freq=997.0, images=False, image_freq=None,
@@ -1148,7 +1398,7 @@ def main():
     a.spec = load_spec(a.dut_spec) if a.dut_spec else None
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    outdir = a.outdir or os.path.join("results", "spdif_dac", f"{a.label}_{stamp}")
+    outdir = a.outdir or os.path.join("results", "dac", f"{a.label}_{stamp}")
     os.makedirs(outdir, exist_ok=True)
     log = Log(os.path.join(outdir, "summary.txt"))
 
@@ -1158,8 +1408,9 @@ def main():
         if not a.port:
             p.error("--port is required (or use --dry-run)")
         u = connect(a.port, a.baud, a.timeout)
-    rig = Rig(u, log, a)
-    log(f"# spdif_dac_test {a.test}  label={a.label}  fs={a.fs}  {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    rig = Rig(u, log, a, a.source)
+    log(f"# dac_test {a.test}  label={a.label}  source={a.source}  fs={a.fs}  "
+        f"{time.strftime('%Y-%m-%d %H:%M:%S')}")
     log(f"# UPL: {rig.q('*IDN?')}")
     if a.spec:
         log(f"# DUT reference: {a.spec.get('name', a.dut_spec)}")
@@ -1174,6 +1425,8 @@ def main():
                 run(rig, a, outdir, log)
             rig.cleanup()
     finally:
+        if rig.src.name == "pc":
+            rig.src.close()                          # never leave a tone playing
         if rig.rejected:
             log(f"\n# {len(rig.rejected)} command(s) rejected by the UPL:")
             for c, e in rig.rejected:
@@ -1187,6 +1440,9 @@ def run_all(rig, a, outdir, log):
     ctx = {}
     per_test_level = {"fr": -10.0, "fft": -1.0, "images": -1.0, "imd": -3.0}
     for name, which in ALL_PLAN:
+        if name in rig.src.unsupported:
+            log(f"\n=== {name}: needs the UPL's own generator; skipped with --source {rig.src.name} ===")
+            continue
         fn, header = TESTS[name]
         rates = a.fs
         if which == "first":

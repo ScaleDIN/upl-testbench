@@ -376,11 +376,42 @@ option tokens, which is now identified above — previously flagged as unknown.)
   (B29) → DAC → UPL analog analyzer.
   User reports (2026‑09‑24) that it "sounds great but measures strange": **frequency response
   all over the place and unequal between channels.** Test suite written for it:
-  `measurements/spdif_dac_test.py` (see README) — FR as broadband *and* selective RMS, repeated,
+  `measurements/spdif_dac_test.py` — **renamed `dac_test.py` on 2026‑09‑24, with a `--source pc`
+  option for USB DACs (see below)** (see README) — FR as broadband *and* selective RMS, repeated,
   with an automatic diagnosis (L/R mismatch vs image/hum contamination vs non-repeatability vs
   NOS sinc droop), plus THD+N, images, IMD, crosstalk, Zout, polarity, **jitter transfer via B22**
   (the old "needs B22" note here was stale — B22 is fitted), and interface robustness. Not yet
   run live; diagnosis logic verified offline against a simulated faulty DAC.
+- **Sony NW-A306** (Walkman DAP, added 2026‑09‑24): 3.5 mm headphone out only, S‑Master HX
+  (class‑D‑style) output stage — so THD+N/noise need a routed ≤20 kHz LP, and A22-vs-A100 RMS shows
+  the ultrasonic residue. **It has a USB‑DAC mode** (Sony help guide; Music player → USB DAC), so the
+  PC can drive it like the M51; one review says USB input is 48 kHz max — unverified. Hi-res paths
+  are then only reachable by copying files onto it and using `upacd_test.py --external`. Test
+  plan: volume law/L‑R imbalance, max output at no load / 32 Ω / 16 Ω (resistor load box), Zout,
+  FR, THD vs THD+N, noise (battery vs USB-connected — USB also grounds it to the laptop), crosstalk
+  *under load* (shared TRS ground), IMD, linearity, J‑test. Turn off DSEE/ClearAudio+/EQ/AVLS.
+  Test WAVs: `tools/testsignals.py` (generic, any DAC — see README). Nothing measured yet.
+- **One DAC suite, two sources (2026‑09‑24).** `spdif_dac_test.py` → **`measurements/dac_test.py`**.
+  `--source upl` (default) = the UPL's B29 generator into S/PDIF/AES, unchanged: an offline SCPI
+  trace diff against the old script shows only redundant extra resets, and the `--dry-run` CSVs are
+  identical. `--source pc --device N` = this PC synthesizes each tone and plays it bit-exact
+  (int32 loop, PortAudio dither off, WASAPI exclusive) into a USB DAC. Differences the PC source
+  forces: selective RMS uses `SENS:FREQ:MODE FIX` + `SENS:FREQ <f>` per tone (Vol.2 p.3.114; there's
+  also `CH1`/`CH2`, tracking the measured input frequency — unused), aperture AUTO instead of GENT,
+  and THD/DFD/MDIS rely on finding the fundamental from the signal (`SENS:VOLT:FUND:MODE AUTO`,
+  their default). Tone frequencies are snapped to 1 Hz (0.1 Hz below 100 Hz) so the loop is
+  seamless. `jitter`, `interface`, `polarity` are UPL-only. Multitone tones aren't on UPL FFT bins
+  (no ATRack from outside), so the window's skirts set the between-tone floor. **Not run live.**
+  `upacd_test.py` stays separate: it's for *fixed* recordings (disc tracks, generated files,
+  `--external` players), where the PC doesn't control each tone.
+- **`upacd_test.py linearity` fix (2026‑09‑24):** it measured *broadband* RMS and found steps by
+  frequency lock, so the bottom steps read the noise floor or vanished. Now RMS selective (1 %
+  band fixed at 1 kHz), steps located by time between the 2 kHz markers, referenced to the first
+  step. Also fixed an unquoted `SENS3:FUNC FREQ` in its setup (quoted names only, else `-141`),
+  and two `poll_upl` bugs the dry-run stub (bare numbers) hid: it `float()`ed replies that carry a
+  unit (`0.999 V` → ValueError → *every* reading silently dropped on real hardware), and it
+  discarded a reading whenever the frequency counter returned the sentinel, which is exactly
+  the buried-step case. Now: first token parsed; no-lock keeps the level with frequency NaN.
 - **Turntable** (needs test LP): wow & flutter, speed error, rumble, RIAA conformance, crosstalk.
 - **miniDSP UMIK‑1** (USB calibrated mic): does NOT connect to the UPL (USB audio). It's the
   acoustic front‑end for the **laptop** (`audio_tests.py`) — apply its per‑serial cal file; do
