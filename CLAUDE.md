@@ -324,6 +324,8 @@ Hardware:
 - **UPL‑B1** — Low Distortion Generator (ultra‑low‑THD analog gen; measure the DUT, not the instrument).
 - **UPL‑B29** — Digital Audio I/O, 96 kHz (AES3/EBU + SPDIF generate & analyze; 32/44.1/48/88.2/96 kHz,
   variable 35–106 kHz, high‑rate mode). (B2 = the base 55 kHz variant; user has the 96 kHz B29.)
+  B29 vs B2 board-level differences (same front I/O board 1078.4223.02, newer main board): see
+  **`B29_HARDWARE.md`**. Feb 2022 selftest photo showed no B21/B22/B23 — enabled since.
 - (UPL‑B5 speaker/monitor — hardware; assume fitted per "all options".)
 
 Software (user has ALL software options):
@@ -379,7 +381,7 @@ option tokens, which is now identified above — previously flagged as unknown.)
   T2 → R82‖R83 (150‖150 = **75 Ω** series) → BNC, secondary floating (R283 ground link not fitted).
   BAL = transformer T3 → 2 × (110‖110) = 55 Ω per leg = **110 Ω** → XLR. So the BNC is a proper
   75 Ω S/PDIF source: coax DACs need no 110→75 Ω transformer (the README said otherwise until
-  this date). Drawings are for the B2 (1078.4100); B2 and B29 share the same output board (user).
+  this date). Drawings are for the B2 (1078.4100); B2 and B29 share the same output board, 1078.4223.02 (user; confirmed from photos — see `B29_HARDWARE.md`).
   User reports (2026‑09‑24) that it "sounds great but measures strange": **frequency response
   all over the place and unequal between channels.** Test suite written for it:
   `measurements/spdif_dac_test.py` — **renamed `dac_test.py` on 2026‑09‑24, with a `--source pc`
