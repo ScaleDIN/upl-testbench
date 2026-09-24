@@ -158,7 +158,7 @@ COM2 baud to match, or override with `--baud` if you're running it at something 
    reading, then `OVERALL: PASS` or `OVERALL: FAIL`.
 5. Saves everything to a results folder, `results/selftest/<label>_<YYYYMMDD-HHMMSS>/`
    (label `selftest` unless you give `--label`; `--outdir DIR` to put it elsewhere):
-   - `report.html`: open it in a browser. The headline ("PASS: 124/124 readings within
+   - `report.html`: open it in a browser. The headline ("PASS: 137/137 readings within
      tolerance"), any out-of-tolerance readings first, then one table per section with set,
      measured, deviation, tolerance and a pass/FAIL mark on every reading.
    - `report.txt`: the same text the console showed, as the selftest has always written it.
@@ -183,10 +183,15 @@ original program didn't check, and neither did this script before 2026‑09‑24
 commands, their order and the tolerances are exactly the R&S program's, so results compare
 directly with earlier runs and with other units' reports.
 
-Takes a few minutes end-to-end (124 readings; section 3 alone is 48 of them). Runs before
-2026‑09‑24 had 121: section 10 recorded only the CH1 level and the frequency, and skipped the
-two sample-rate checks the R&S program makes, so it now has 5 readings instead of 2 (and the
-B1 section's frequency readings are still logged but not counted, as before).
+Takes a few minutes end-to-end (137 readings; section 3 alone is 96 of them, both channels).
+
+**The pass/fail is exactly the R&S program's.** Every check `SELFTEST_Program.TXT` makes is
+counted: both channels wherever it checks both, the B1 generator's frequency (±0.8 %), and
+the digital input's sample rate at 48 and 44.1 kHz. Like R&S, the noise measurements are
+repeated up to 3 more times while either channel is over the limit, so a single noise spike
+isn't reported as a fault (each extra attempt is logged). Runs before 2026‑09‑24 counted 121
+readings: CH1 only in sections 5–9, no B1 frequency or CH2, no sample-rate checks, no noise
+retry. That was laxer than R&S, so an old "121/121" is not directly the same verdict.
 
 ## Reading the output
 

@@ -19,6 +19,8 @@ Sections covered (full resolution, matching the original):
   8. Inherent noise, A22              (spec <= 2 uV)
   9. Inherent noise, A100             (spec <= 8 uV)
   10. Digital audio (B29)             (5 points: level L/R, freq, sample rate 48k/44.1k)
+Every check the R&S program makes is counted: both channels wherever it checks both, and
+the B1 generator's frequency (137 readings; runs before 2026-09-24 counted 121).
                                       -- skipped if no digital option
 
 INSTRUMENT STATE. Like the real selftest this starts with *RST, which clears whatever is
@@ -38,9 +40,10 @@ HOW COMMANDS ARE SENT (lessons from CLAUDE.md, applied 2026-09-24):
     and listed in the report (the original ignored them, so a rejection could skew a reading)
   - *CLS after *RST (*RST does not clear the error queue)
 The measurement commands, their order and the tolerances are unchanged, so results stay
-comparable with the 2026-09-22 run and with other units' R&S selftest reports. Section 10
-now also records what the R&S program checks and this script used to skip: the CH2 level and
-the input sample rate at 48 and 44.1 kHz (124 readings; runs before 2026-09-24 had 121).
+comparable with the 2026-09-22 run and with other units' R&S selftest reports. Before
+2026-09-24 this script's pass/fail was laxer than R&S's: it counted only CH1 in sections 5-9,
+never counted the B1 frequency or CH2, skipped the digital sample-rate checks, and didn't retry
+the noise measurement as R&S does. All of that now matches the R&S program.
 
 Usage:
   python upl_selftest.py --port COM2
@@ -90,7 +93,9 @@ def is_na(v):
 
 def fp(d, unit="%"):
     """A deviation for the log line; 'n/a' when the reading was the no-value sentinel."""
-    return "n/a" if d is None else "%+.2f%s" % (d, unit)
+    if d is None:
+        return "n/a"
+    return ("%+.3f%s" if abs(d) < 1 else "%+.2f%s") % (d, unit)
 
 
 class DrySelftestUPL(DryRunUPL):
@@ -175,6 +180,18 @@ class Selftest:
         self.results.append(dict(section=section, chan=chan, set=setv, meas=meas,
                                   dev=dev, tol=tol, unit=unit, ok=ok))
         return dev, ok
+
+    def noise(self, limit):
+        """Noise in uV, both channels. Like the R&S program (lines 6140-6180, 6410-6450): while
+        either channel is over the limit, measure again, up to 3 more times -- a single noise
+        spike isn't a fault. Every attempt over the limit is logged."""
+        for rep in range(4):
+            self.trigger()
+            w1 = 1e6 * parse_num(self.q("sens:data?"))
+            w2 = 1e6 * parse_num(self.q("sens:data2?"))
+            if (w1 <= limit and w2 <= limit) or rep == 3:
+                return w1, w2
+            self.log("  (attempt %d over %g uV: CH1 %.2f CH2 %.2f -- measuring again)" % (rep + 1, limit, w1, w2))
 
     def reset(self):
         self.u.write("*RST")
@@ -265,22 +282,27 @@ class Selftest:
                 m2 = parse_num(q("sens:data2?"))
                 mf = parse_num(q("sens3:data?"))
                 d1, ok1 = self.rec("Low-dist gen", str(freq) + "Hz", volt, m1, tol)
-                fd = 100 * (mf - freq) / freq if not is_na(mf) else None
-                log("  %6d Hz set %s V -> CH1 %.5f V (%s)  freq meas %.2f Hz (%s)  tol %s%%/%s%%%s" %
-                    (freq, volt, m1, fp(d1), mf, fp(fd), tol, tfreq, "" if ok1 else "  <-- OUT OF TOL"))
+                d2, ok2 = self.rec("Low-dist gen", str(freq) + "Hz CH2", volt, m2, tol)
+                fd, okf = self.rec("Low-dist gen", str(freq) + "Hz freq", freq, mf, tfreq)
+                log("  %6d Hz set %s V -> CH1 %.5f V (%s)  CH2 %.5f V (%s)  freq %.2f Hz (%s)  tol %s%%/%s%%%s" %
+                    (freq, volt, m1, fp(d1), m2, fp(d2), mf, fp(fd), tol, tfreq,
+                     "" if ok1 and ok2 and okf else "  <-- OUT OF TOL"))
             for c in ["INST2 A100", "INP:SEL CH2I", "INP:TYPE GEN2", "SENS:VOLT:RANG:AUTO OFF",
                       "SENS:VOLT:RANG 3 V", "SENS2:FUNC 'OFF'", "SENS3:FUNC 'FREQ'"]:
                 cmd(c)
-            freq, volt, tol = 25000, 1.0, 2.7
+            freq, volt, tol, tfreq = 25000, 1.0, 2.7, 0.8
             cmd("sour:freq " + str(freq) + "HZ;*wai")
             time.sleep(settle)
             self.trigger()
             m1 = parse_num(q("sens:data?"))
+            m2 = parse_num(q("sens:data2?"))
             mf = parse_num(q("sens3:data?"))
             d1, ok1 = self.rec("Low-dist gen", str(freq) + "Hz", volt, m1, tol)
-            fd = 100 * (mf - freq) / freq if not is_na(mf) else None
-            log("  %6d Hz set %s V -> CH1 %.5f V (%s)  freq meas %.2f Hz (%s)  tol %s%%%s" %
-                (freq, volt, m1, fp(d1), mf, fp(fd), tol, "" if ok1 else "  <-- OUT OF TOL"))
+            d2, ok2 = self.rec("Low-dist gen", str(freq) + "Hz CH2", volt, m2, tol)
+            fd, okf = self.rec("Low-dist gen", str(freq) + "Hz freq", freq, mf, tfreq)
+            log("  %6d Hz set %s V -> CH1 %.5f V (%s)  CH2 %.5f V (%s)  freq %.2f Hz (%s)  tol %s%%/%s%%%s" %
+                (freq, volt, m1, fp(d1), m2, fp(d2), mf, fp(fd), tol, tfreq,
+                 "" if ok1 and ok2 and okf else "  <-- OUT OF TOL"))
             cmd("INST2 A22")
         else:
             log("=== 2. Low distortion generator: SKIPPED (B1 not reported by *OPT?) ===")
@@ -341,6 +363,7 @@ class Selftest:
         log("  CH1 %.2f dB (target -60, dev %+.2f dB)   CH2 %.2f dB (dev %+.2f dB)   tol 0.5dB" %
             (w1, w1 + 60, w2, w2 + 60))
         self.rec("THD+N -60dB linearity", "CH1", -60, w1, 0.5, "dB")
+        self.rec("THD+N -60dB linearity", "CH2", -60, w2, 0.5, "dB")
         cmd("SOUR:FUNC SIN")
 
         log("=== 6. Inherent THD+N @ 1kHz in 100kHz analyzer (tol <= -84dB) ===")
@@ -351,8 +374,8 @@ class Selftest:
         w1 = parse_num(q("sens:data?"))
         w2 = parse_num(q("sens:data2?"))
         _, ok1 = self.rec("Inherent THD+N A100", "CH1", None, w1, -84, "dB")
-        log("  CH1 %.2f dB   CH2 %.2f dB   (spec <= -84 dB)  %s" %
-            (w1, w2, "PASS" if ok1 and w2 <= -84 else "FAIL"))
+        _, ok2 = self.rec("Inherent THD+N A100", "CH2", None, w2, -84, "dB")
+        log("  CH1 %.2f dB   CH2 %.2f dB   (spec <= -84 dB)  %s" % (w1, w2, "PASS" if ok1 and ok2 else "FAIL"))
         cmd("INST2 A22")
 
         log("=== 7. Inherent D2 (DFD) @ 10kHz/200Hz, 2V (tol <= -110dB) ===")
@@ -363,28 +386,26 @@ class Selftest:
         w1 = parse_num(q("sens:data?"))
         w2 = parse_num(q("sens:data2?"))
         _, ok1 = self.rec("Inherent D2 DFD", "CH1", None, w1, -110, "dB")
-        log("  CH1 %.2f dB   CH2 %.2f dB   (spec <= -110 dB)  %s" %
-            (w1, w2, "PASS" if ok1 and w2 <= -110 else "FAIL"))
+        _, ok2 = self.rec("Inherent D2 DFD", "CH2", None, w2, -110, "dB")
+        log("  CH1 %.2f dB   CH2 %.2f dB   (spec <= -110 dB)  %s" % (w1, w2, "PASS" if ok1 and ok2 else "FAIL"))
         cmd("SOUR:FUNC SIN")
 
         log("=== 8. Inherent noise (22kHz analyzer, BAL/R300 input, tol <= 2uV) ===")
         for c in ["SOUR:VOLT 0 V", "SENS:FUNC 'RMS'", "INP:TYPE BAL", "INP:IMP R300", "SENS:VOLT:RANG 18 MV;*wai"]:
             cmd(c)
-        self.trigger()
-        w1 = 1e6 * parse_num(q("sens:data?"))
-        w2 = 1e6 * parse_num(q("sens:data2?"))
+        w1, w2 = self.noise(2)
         _, ok1 = self.rec("Inherent noise A22", "CH1", None, w1, 2, "uV")
-        log("  CH1 %.2f uV   CH2 %.2f uV   (spec <= 2 uV)  %s" % (w1, w2, "PASS" if ok1 and w2 <= 2 else "FAIL"))
+        _, ok2 = self.rec("Inherent noise A22", "CH2", None, w2, 2, "uV")
+        log("  CH1 %.2f uV   CH2 %.2f uV   (spec <= 2 uV)  %s" % (w1, w2, "PASS" if ok1 and ok2 else "FAIL"))
 
         log("=== 9. Inherent noise (100kHz analyzer, tol <= 8uV) ===")
         cmd("INST2 A100")
         for c in ["SOUR:VOLT 0 V", "SENS:FUNC 'RMS'", "INP:TYPE BAL", "INP:IMP R300", "SENS:VOLT:RANG 18 MV;*wai"]:
             cmd(c)
-        self.trigger()
-        w1 = 1e6 * parse_num(q("sens:data?"))
-        w2 = 1e6 * parse_num(q("sens:data2?"))
+        w1, w2 = self.noise(8)
         _, ok1 = self.rec("Inherent noise A100", "CH1", None, w1, 8, "uV")
-        log("  CH1 %.2f uV   CH2 %.2f uV   (spec <= 8 uV)  %s" % (w1, w2, "PASS" if ok1 and w2 <= 8 else "FAIL"))
+        _, ok2 = self.rec("Inherent noise A100", "CH2", None, w2, 8, "uV")
+        log("  CH1 %.2f uV   CH2 %.2f uV   (spec <= 8 uV)  %s" % (w1, w2, "PASS" if ok1 and ok2 else "FAIL"))
         cmd("INST2 A22")
 
         if Dig:

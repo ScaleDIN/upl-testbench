@@ -115,10 +115,19 @@ Facts learned along the way:
   any failed or partial block read, drain the port (read until ~5 s of silence) before trusting
   the link. It drained 142 kB here. (The failures themselves were a shell-quoting slip on my side, `\\$f`
   sending a literal `$f` path, not a tool fault.)
+- **`upl_selftest.py` pass/fail now matches `SELFTEST_Program.TXT` exactly (later the same
+  day).** Compared every pass/fail condition in the R&S source: ours counted only CH1 in
+  sections 5–9 (THD+N −60 dB, THD+N A100, DFD, noise ×2; the console line checked CH2 but the
+  count didn't), never counted the B1 CH2 level or the B1 frequency (±0.8 %), and didn't
+  repeat the noise measurement (R&S re-measures up to 3 more times while either channel is
+  over the limit, lines 6140–6180 / 6410–6450). All added; 137 readings. Deviations now print
+  to 3 decimals below 1 % (the 0.01 % checks used to print "−0.00 %").
 - **Added to `upl_selftest.py` the same day:** the R&S digital subroutine's sample-rate checks
   (`SENS3:FUNC 'SFRE'` → 48000, then `INP:SAMP:FREQ:MODE AUTO` + `OUTP:SAMP:MODE F44` → 44100,
   ±0.01 %) plus the CH2 level, which R&S also checks. Section 10 now has 5 readings, the total
-  124 instead of 121. Dry-run only so far.
+  124 instead of 121. **Live 22:26: PASS 124/124**, sample rate 47 999.7 / 44 099.6 Hz.
+- **R&S-parity version live 22:30: PASS 137/137** (`results/selftest/rs_parity_20260924-223020/`), no noise
+  retry needed, setup restored. B1 CH2 −0.10 to −0.16 %, B1 frequency within 0.1 %.
 
 ## Goal / context
 
