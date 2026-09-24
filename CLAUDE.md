@@ -127,7 +127,7 @@ Facts learned along the way:
   ±0.01 %) plus the CH2 level, which R&S also checks. Section 10 now has 5 readings, the total
   124 instead of 121. **Live 22:26: PASS 124/124**, sample rate 47 999.7 / 44 099.6 Hz.
 - **R&S-parity version live 22:30: PASS 137/137** (`results/selftest/rs_parity_20260924-223020/`), no noise
-  retry needed, setup restored. B1 CH2 −0.10 to −0.16 %, B1 frequency within 0.1 %.
+  retry needed, setup restored. B1 CH2 −0.14 to −0.19 %, B1 frequency within 0.04 %.
 
 ## Goal / context
 
