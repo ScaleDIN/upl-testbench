@@ -118,7 +118,7 @@ python upl_capture.py --port COM7 fft --size 8192 -o fft.csv
 python upl_capture.py --port COM7 fft --zoom 8 --center 10000 -o zoomed.csv
 ```
 
-This is what the "FFT zoom quirk" in `m51_jitter_fft.py` turned out to be — zoom was never broken,
+This is what the "FFT zoom quirk" in the old `m51_jitter_fft.py` turned out to be — zoom was never broken,
 the readout was returning the wrong eighth of it. `CLAUDE.md`'s "FFT zoom quirk RESOLVED" section
 has the full arithmetic. Note that over the bus you set the zoom **factor**, never the SPAN
 (`CALC:TRAN:FREQ:SPAN?` is query-only).
@@ -342,35 +342,32 @@ a planted 0.5 dB error at −100 dBFS came back out, and −120 dBFS read the co
 
 ## NAD M51 DAC characterization
 
-Physical setup: laptop → USB → M51 (as the digital source) → M51 analog balanced output → UPL
-analyzer input. M51 is controlled over RS232 (volume, source) while the UPL reads the result;
-the test tone itself is generated on the laptop and played out over USB to the M51 (find the
-right `sounddevice` output index with `python audio_tests.py devices` first, or use
-`--exclusive` for WASAPI exclusive mode when you need a bit-exact 96k/192k rate rather than
-whatever Windows' own resampler produces).
+The M51 is tested with the general DAC suite, [`dac_test.py`](#dac-characterization-measurementsdac_testpy):
+laptop → USB → M51 → balanced out → UPL analyzer, with `--source pc`. `nad_m51.py` (RS‑232, COM2,
+115200, no handshake) is the only M51-specific code left; `dac_test.py --dut m51` uses it.
+
+- **Fixed-output mode** (the M51's own setting): the M51 is a plain DAC to the suite. Run it like any
+  other; add `--dut m51` only if you want its source and volume logged in the report.
+- **Variable output:** `--dut m51 --volume 0` sets the volume for the run and restores it at the end.
+- **`volsweep`**: THD+N/THD/level vs the M51's own volume, to find the best setting to leave it at
+  when something downstream does the level control.
 
 ```bash
-# frequency response + THD+N-vs-frequency at a given USB sample rate
-python measurements/m51_freq_response.py --fs 48000 --device 16 -o results/m51_fr_48k.csv
-
-# THD+N/THD/noise vs the M51's own volume setting -- finds the best gain to leave
-# it at when something downstream handles level control
-python measurements/m51_gain_sweep.py --device 16 --fs 48000 -o results/m51_gain_sweep_48k.csv
-
-# CCIF twin-tone IMD (19k+20k by default) via the UPL's DFD analyzer function
-python measurements/m51_imd.py --fs 48000 --device 16
-
-# frequency-counter scatter across many rapid readings -- a coarse jitter/clock-
-# stability proxy, directly comparable across sample rates
-python measurements/m51_freq_stability.py --fs 96000 --device 16 -o results/m51_jitter_96k.csv
-
-# FFT-based sideband/jitter check (needs CALC:TRAN:FREQ:ZOOM 1 -- see the script's
-# docstring for a hard-won firmware quirk about which zoom mode actually works)
-python measurements/m51_jitter_fft.py --fs 44100 --device 16 -o results/m51_jitter_fft_44k.csv
+python measurements/dac_test.py --port COM7 --source pc --device 16 --fs 44100,96000,192000 \
+    --settle 0.6 --label m51 all                                  # fixed-output mode
+python measurements/dac_test.py --port COM7 --source pc --device 16 --fs 96000 \
+    --dut m51 --volume 0 --label m51_0dB all                       # variable, run at 0 dB
+python measurements/dac_test.py --port COM7 --source pc --device 16 --fs 48000 \
+    --dut m51 volsweep --volumes -20,-10,-6,-3,0,3,6,10
 ```
 
-All M51 scripts default `--m51-port COM2 --upl-port COM7` — override if your ports differ.
-`--fs` is required on most of them (the whole point is comparing behavior across sample rates).
+The M51's S/PDIF, optical and AES inputs can be tested with `--source upl` instead, fed from the
+UPL's digital output. `--dut m51` works the same with either source.
+
+The five `measurements/m51_*.py` scripts were retired on 2026‑09‑24: frequency response → `fr` +
+`thdn`, IMD → `imd` + `imdlevel`, FFT sidebands → `jtest` + `fft`, gain sweep → `volsweep`, and
+the frequency-counter jitter proxy → `jtest`, the proper test. They're in git history (`aa6dfa1`)
+if ever needed.
 
 ## DAC characterization (`measurements/dac_test.py`)
 
@@ -392,6 +389,11 @@ comes from; every measurement and diagnosis is shared, so results are comparable
 
 A player that can only play files itself (the NW‑A306's own playback) can't be driven this way;
 use `tools/testsignals.py` + `upacd_test.py --external` for that.
+
+Most DACs need no control: set them up by hand and the suite treats them as a black box.
+**`--dut m51`** (the only one so far) logs the DUT's source and volume in the report, sets
+`--volume` for the run and restores it, and enables **`volsweep`** (THD+N/THD/level vs the DUT's
+volume). Adding another DUT means one small class in `dac_test.py`'s `DUTS`.
 
 Physical setup: UPL digital out (BNC unbal for coax, XLR via 110→75 Ω transformer, or optical)
 → DAC input; DAC L/R analog out → UPL analyzer inputs 1/2. RCA outputs go into the XLR inputs

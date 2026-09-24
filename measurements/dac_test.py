@@ -42,6 +42,8 @@ Tests (subcommands), in the order worth running them:
   linearity  level error 0 to -130 dBFS, selective
   imdlevel   SMPTE and CCIF IMD vs level, -60 to 0 dBFS
   filter     white noise, wideband FFT: the reconstruction filter's shape
+ DUT control (--dut, optional):
+  volsweep   THD+N/THD/level vs the DUT's own volume setting (not part of `all`)
   all        everything above, sensible defaults
 
 Comparing with ASR: set the DAC to 2 V (unbalanced) / 4 V (balanced) at 0 dBFS if it
@@ -56,6 +58,11 @@ Usage:
   python measurements/dac_test.py --port GPIB0::20::INSTR --label mydac all
   python measurements/dac_test.py --port COM7 --source pc --device 16 --fs 48000 \
       --settle 0.6 --label m51_usb all
+  # NAD M51: log its state, run at 0 dB, restore after (omit --volume in fixed-output mode)
+  python measurements/dac_test.py --port COM7 --source pc --device 16 --fs 96000 \
+      --dut m51 --dut-port COM2 --volume 0 --label m51_usb all
+  python measurements/dac_test.py --port COM7 --source pc --device 16 --fs 48000 \
+      --dut m51 volsweep
 
 Output: results/dac/<label>_<timestamp>/ -- one CSV per test and
 summary.txt (everything printed to the console).
@@ -493,6 +500,7 @@ class PCSource:
         self.stream = None
         self.buf = None
         self.pos = 0
+        self.ref_cur = None                          # twin tone the UPL generator mirrors
         self.lock = threading.Lock()
 
     # --- audio plumbing
@@ -574,6 +582,18 @@ class PCSource:
         else:                                        # CCIF 19 + 20 kHz, 1:1
             x = pk * 0.5 * (np.sin(2 * math.pi * 19000 * t) + np.sin(2 * math.pi * 20000 * t))
         self.play(x, f"{kind} twin tone {dbfs:+.1f} dBFS")
+        if kind != self.ref_cur:
+            # The DFD/MDIS analyzers take their frequencies from the UPL
+            # generator's settings (found with m51_imd.py), so set the matching
+            # function there too -- muted: its output isn't connected anyway.
+            r = self.rig
+            setup = (("SOUR:FUNC MDIS", "SOUR:FREQ 7000 HZ", "SOUR:FREQ2 60 HZ", "SOUR:VOLT:RAT 4")
+                     if kind == "SMPTE" else
+                     ("SOUR:FUNC DFD", "SOUR:FREQ:MEAN 19500 HZ", "SOUR:FREQ:DIFF 1000 HZ"))
+            for c in setup:
+                r.setc(c, slow=c.startswith("SOUR:FUNC"))
+            r.setc("SOUR:VOLT:TOT 1e-20 V", quiet=True)
+            self.ref_cur = kind
 
     def jtest(self, bits):
         """The samples of jtest_samples(), as exact codes: tone at +/-0.5 FS (45 deg,
@@ -598,11 +618,74 @@ class PCSource:
         return tones
 
     def sine(self):
-        pass
+        if self.ref_cur:                             # undo twin()'s analyzer reference
+            self.rig.setc("SOUR:FUNC SIN", slow=True)
+            self.ref_cur = None
 
     def cleanup(self):
         self.rig.log("\n-- cleanup: PC output stopped")
         self.close()
+
+
+# ---------------------------------------------------------------- DUT control (optional)
+#
+# Most DACs need none: set them up by hand and the suite treats them as a black
+# box. --dut adds only what the analysis can't see: the DUT's own state logged
+# in the report, --volume set for the run (and restored), and `volsweep`.
+
+class M51Dut:
+    """NAD M51 over RS-232 (nad_m51.py). In fixed-output mode leave out --volume
+    and it's just logged; the M51 is then a plain DAC to the suite."""
+    name = "m51"
+
+    def __init__(self, port):
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+        from nad_m51 import M51
+        self.m = M51(port)
+        self.orig_volume = None
+
+    def describe(self):
+        return f"NAD M51: source={self.m.get_source()!r}, volume={self.m.get_volume_db():g} dB"
+
+    def set_volume(self, db):
+        if self.orig_volume is None:
+            self.orig_volume = self.m.get_volume_db()
+        self.m.set_volume_db(db)
+
+    def restore(self):
+        if self.orig_volume is not None:
+            self.m.set_volume_db(self.orig_volume)
+            return f"volume restored to {self.orig_volume:g} dB"
+        return None
+
+    def close(self):
+        self.m.close()
+
+
+class DryDut:
+    """--dry-run stand-in: remembers the volume, talks to nothing."""
+    def __init__(self, name):
+        self.name, self.vol, self.orig_volume = name, 0.0, None
+
+    def describe(self):
+        return f"{self.name} (dry run): volume={self.vol:g} dB"
+
+    def set_volume(self, db):
+        if self.orig_volume is None:
+            self.orig_volume = self.vol
+        self.vol = db
+
+    def restore(self):
+        if self.orig_volume is not None:
+            self.vol = self.orig_volume
+            return f"volume restored to {self.orig_volume:g} dB"
+        return None
+
+    def close(self):
+        pass
+
+
+DUTS = {"m51": M51Dut}
 
 
 # ---------------------------------------------------------------- spectrum analysis
@@ -1251,6 +1334,37 @@ def t_interface(rig, a, fs, ctx):
     return rows
 
 
+def t_volsweep(rig, a, fs, ctx):
+    """THD+N, THD and level vs the DUT's own volume setting (was m51_gain_sweep.py):
+    finds the setting to leave a DAC at when something downstream does the
+    level control. Needs --dut; the DUT's volume is restored afterwards."""
+    log = rig.log
+    rig.configure(fs)
+    rig.tone(997, a.level)
+    rows = []
+    for v in a.volumes:
+        rig.dut.set_volume(v)
+        time.sleep(a.settle + 0.3)
+        (l1, _), (l2, _) = rig.measure("RMS")
+        (n1, nu1), (n2, nu2) = rig.measure("THDN")
+        (h1, hu1), (h2, hu2) = rig.measure("THD")
+        r = (fs, v, l1, l2, ratio_db(n1, nu1), ratio_db(n2, nu2), ratio_db(h1, hu1), ratio_db(h2, hu2))
+        rows.append(r)
+        log(f"   volume {v:+6.1f} dB: L {fmt(l1, '%.4f')} V  R {fmt(l2, '%.4f')} V  "
+            f"THD+N L {fmt(r[4], '%.1f')} R {fmt(r[5], '%.1f')} dB  THD L {fmt(r[6], '%.1f')} dB")
+    best = min(((r[4], r[1]) for r in rows if r[4] is not None), default=None)
+    if best:
+        log(f"   best THD+N (L): {best[0]:.1f} dB at volume {best[1]:+.1f} dB "
+            f"({a.level:+.0f} dBFS tone)")
+    msg = rig.dut.restore()
+    if msg:
+        log(f"   {msg}")
+    rig.dut.orig_volume = None                   # --volume (if any) is re-applied by main
+    if a.volume is not None:
+        rig.dut.set_volume(a.volume)
+    return rows
+
+
 TESTS = {
     "check":     (t_check, ["fs", "locked", "meas_freq_Hz", "fullscale_L_V", "fullscale_R_V",
                             "LminusR_dB", "dc_L_V", "dc_R_V"]),
@@ -1273,6 +1387,8 @@ TESTS = {
     "linearity": (t_linearity, ["fs", "set_dBFS", "L_V", "R_V", "L_err_dB", "R_err_dB"]),
     "imdlevel":  (t_imd_level, ["fs", "test", "level_dBFS", "L_dB", "R_dB"]),
     "filter":    (t_filter, ["fs", "freq_Hz", "level_V"]),
+    "volsweep":  (t_volsweep, ["fs", "volume_dB", "L_V", "R_V", "THDN_L_dB", "THDN_R_dB",
+                               "THD_L_dB", "THD_R_dB"]),
 }
 
 # `all`: which tests, and at which sample rates (None = every --fs)
@@ -1291,6 +1407,9 @@ def run(rig, a, outdir, log):
     name = "images" if (a.test == "fft" and a.images) else a.test
     if name in rig.src.unsupported:
         log(f"\n=== {name}: needs the UPL's own generator (--source upl); skipped ===")
+        return
+    if name == "volsweep" and rig.dut is None:
+        log("\n=== volsweep: needs --dut (a DUT whose volume this script can set); skipped ===")
         return
     fn, header = TESTS[name]
     ctx, rows = {}, []
@@ -1324,6 +1443,12 @@ def main():
     p.add_argument("--no-reset", action="store_true", help="skip the initial *RST")
     p.add_argument("--preserve", action="store_true",
                    help="snapshot the UPL setup first and restore it at the end (MMEM:STOR:STAT 2)")
+    p.add_argument("--dut", choices=sorted(DUTS),
+                   help="control the DUT too: log its state; with --volume set it for the run")
+    p.add_argument("--dut-port", default="COM2", help="--dut serial port (M51: 115200, no handshake)")
+    p.add_argument("--volume", type=float,
+                   help="--dut: volume (dB) for the run, restored at the end. Leave out for a "
+                        "fixed-output DAC (e.g. the M51's fixed-output setting)")
     p.add_argument("--dut-spec", metavar="NAME|FILE",
                    help="JSON file of the DUT's published figures to print next to each result; "
                         "a bare NAME means measurements/dut_specs/NAME.json")
@@ -1336,6 +1461,10 @@ def main():
     s.add_argument("--readings", type=int, default=20, help="repeated 997 Hz level readings")
     s.add_argument("--monitor", type=float, default=0.0,
                    help="then stream L/R level for this many seconds (tap relays, flex cables)")
+    s = sub.add_parser("volsweep", help="THD+N/THD/level vs the DUT's volume (needs --dut)")
+    s.add_argument("--volumes", default="-20,-15,-10,-6,-3,-1,0,1,3,6,10",
+                   help="volume settings, dB")
+    s.add_argument("--level", type=float, default=-1.0, help="test tone, dBFS")
     s = sub.add_parser("jtest")
     s.add_argument("--jbits", default="24,16", help="word lengths to run the J-test at")
     s.add_argument("--fft-avg", type=int, default=4)
@@ -1391,6 +1520,9 @@ def main():
     if a.level is None:
         a.level = -10.0
     a.analyzers = a.analyzer.split(",")
+    if a.volume is not None and not a.dut:
+        p.error("--volume needs --dut")
+    a.volumes = [float(v) for v in str(getattr(a, "volumes", "0")).split(",")]
     a.levels = [-100, -90, -80, -70, -60, -50, -40, -30, -20, -12, -6, -3, -1, 0]
     a.jfreqs = [float(x) for x in str(a.jfreqs).split(",")]
     a.jbits = [int(x) for x in str(a.jbits).split(",")]
@@ -1409,12 +1541,20 @@ def main():
             p.error("--port is required (or use --dry-run)")
         u = connect(a.port, a.baud, a.timeout)
     rig = Rig(u, log, a, a.source)
+    rig.dut = None
+    if a.dut:
+        rig.dut = DryDut(a.dut) if a.dry_run else DUTS[a.dut](a.dut_port)
     log(f"# dac_test {a.test}  label={a.label}  source={a.source}  fs={a.fs}  "
         f"{time.strftime('%Y-%m-%d %H:%M:%S')}")
     log(f"# UPL: {rig.q('*IDN?')}")
     if a.spec:
         log(f"# DUT reference: {a.spec.get('name', a.dut_spec)}")
     try:
+        if rig.dut:
+            log(f"# DUT: {rig.dut.describe()}")
+            if a.volume is not None:
+                rig.dut.set_volume(a.volume)
+                log(f"# DUT volume set to {a.volume:g} dB for this run (restored at the end)")
         with preserve_state(u, a.state_file, enabled=a.preserve):
             if not a.no_reset:
                 rig.setc("*RST", slow=True)
@@ -1425,6 +1565,11 @@ def main():
                 run(rig, a, outdir, log)
             rig.cleanup()
     finally:
+        if rig.dut:
+            msg = rig.dut.restore()
+            if msg:
+                log(f"# DUT {msg}")
+            rig.dut.close()
         if rig.src.name == "pc":
             rig.src.close()                          # never leave a tone playing
         if rig.rejected:

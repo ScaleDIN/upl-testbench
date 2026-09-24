@@ -398,8 +398,17 @@ option tokens, which is now identified above — previously flagged as unknown.)
   (int32 loop, PortAudio dither off, WASAPI exclusive) into a USB DAC. Differences the PC source
   forces: selective RMS uses `SENS:FREQ:MODE FIX` + `SENS:FREQ <f>` per tone (Vol.2 p.3.114; there's
   also `CH1`/`CH2`, tracking the measured input frequency — unused), aperture AUTO instead of GENT,
-  and THD/DFD/MDIS rely on finding the fundamental from the signal (`SENS:VOLT:FUND:MODE AUTO`,
-  their default). Tone frequencies are snapped to 1 Hz (0.1 Hz below 100 Hz) so the loop is
+  THD/THD+N find the fundamental from the signal (`SENS:VOLT:FUND:MODE AUTO`, their default), but
+  **DFD/MDIS take their frequencies from the UPL generator's settings** (m51_imd.py's finding), so
+  the PC source also sets the matching `SOUR:FUNC DFD|MDIS` + frequencies there, muted at 1e-20 V.
+- **M51 folded into `dac_test.py` (2026‑09‑24).** `--dut m51 [--dut-port COM2] [--volume dB]` logs
+  the M51's source/volume in the report and, with `--volume`, sets it for the run and restores it.
+  In the M51's **fixed-output** mode no `--volume` is needed — it's a plain DAC to the suite. New
+  `volsweep` test = the old `m51_gain_sweep.py` (THD+N/THD/level vs DUT volume; not in `all`).
+  The five `measurements/m51_*.py` scripts were **deleted** (recoverable from `aa6dfa1`): fr/thdn,
+  imd/imdlevel, jtest/fft and volsweep cover them; `m51_freq_stability`'s counter-scatter jitter
+  proxy was dropped in favour of `jtest`. `nad_m51.py` stays as the driver. Caveat: those scripts
+  had been run live; their `dac_test.py` replacements have not. Tone frequencies are snapped to 1 Hz (0.1 Hz below 100 Hz) so the loop is
   seamless. `jitter`, `interface`, `polarity` are UPL-only. Multitone tones aren't on UPL FFT bins
   (no ATRack from outside), so the window's skirts set the between-tone floor. **Not run live.**
   `upacd_test.py` stays separate: it's for *fixed* recordings (disc tracks, generated files,
