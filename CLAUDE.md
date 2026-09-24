@@ -173,6 +173,11 @@ table), so optical needs no setting. Results in `results/dac/optical_*` and `m51
   sweeps. Sending them only when they change is the next speed-up. **Trace units differ from
   `SENS:DATA?`: THD/THD+N traces come back in %** even with `SENS:UNIT? DB`. FFT straight after a
   native sweep works (the curve display mode doesn't break it).
+- **Screen in remote:** the REMOTE caption can't be replaced. `DISP:ANN` / `DISP:ACT` (results and
+  graphics during remote) were already ON; `DISP:TEXT` / `DISP:TEXT:LOC` are `-200`. But
+  **`SYST:COMM:GTL` works over RS-232** (= LOCAL key): the panels come back in the `DISP:CONF`
+  layout, and the next command re-enters REMOTE by itself. `dac_test.py` now does this at the end of
+  every run (`upl_capture.go_local()`; `--stay-remote` to skip).
 - **"WAIT FOR CAL: ANA OFFSET"** on the UPL screen during sweeps: the cyclic analyzer DC-offset
   calibration is due but disabled while a sweep runs (Vol.1 p.2.52). Expected; it runs afterwards.
 

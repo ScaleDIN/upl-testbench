@@ -99,7 +99,7 @@ import time
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from upl_capture import connect, DryRunUPL, read_fft, preserve_state, parse_values  # noqa: E402
+from upl_capture import connect, DryRunUPL, read_fft, preserve_state, parse_values, go_local  # noqa: E402
 from report import Run, add_output_args, is_na, SERIES  # noqa: E402
 
 SENTINEL = 9e36
@@ -1675,6 +1675,8 @@ def main():
     p.add_argument("--relock", type=float, default=2.0, help="seconds to let the DAC relock")
     add_output_args(p, default_label="dac")
     p.add_argument("--no-reset", action="store_true", help="skip the initial *RST")
+    p.add_argument("--stay-remote", action="store_true",
+                   help="leave the UPL in REMOTE at the end (default: SYST:COMM:GTL, panels back)")
     p.add_argument("--stepped", action="store_true",
                    help="fr/thdn: step the frequency from the PC instead of the UPL's own sweep")
     p.add_argument("--preserve", action="store_true",
@@ -1822,6 +1824,8 @@ def _main(u, a, rep):
                 log(f"#   {c}  [{e}]")
             rep.heading("Commands the UPL rejected")
             rep.table(["command", "error"], rig.rejected)
+        if not a.stay_remote:
+            go_local(u)                              # front panel back, showing the last result
         u.close()
     log(f"\n# done -> {rep.dir}")
 

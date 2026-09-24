@@ -516,6 +516,18 @@ def cmd_autoexport(upl, args):
 STATE_TMP = "C:\\UPL\\USER\\UPLTMP.SCO"
 
 
+def go_local(upl):
+    """Hand the front panel back: SYST:COMM:GTL (Vol.2 3.10.8, = the LOCAL key).
+    The screen leaves the REMOTE caption for the normal panels in the layout set
+    by DISP:CONF (part of the setup). Harmless: the next remote command switches
+    the UPL back to REMOTE by itself. Verified over RS-232 2026-09-24. Best-effort:
+    never lets a failure here mask the run's own result."""
+    try:
+        upl.write("SYST:COMM:GTL")
+    except Exception as e:                  # noqa: BLE001 -- cosmetic only
+        print(f"note: go-to-local failed ({e})", file=sys.stderr)
+
+
 class preserve_state:
     """Snapshot the UPL's complete setup, restore it afterwards, delete the scratch file.
 
