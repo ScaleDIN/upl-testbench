@@ -388,6 +388,27 @@ class Rig:
         self.u.write("INIT:CONT OFF;*WAI")
         self.q("*OPC?")
 
+    def unlatch(self):
+        """Undo the THD+N floor latch: THD+N of a clipping 0 dBFS tone makes the A22
+        analyzer step its notch gain down (floor ~-110 -> ~-103 dB) and *RST, INST2,
+        CAL:ZERO, range or rate changes don't restore it. A native 31-point RMS sweep
+        does, both channels, every time (4/4 live 2026-09-25; a 3-point sweep only
+        cleared CH1). Then re-checks the floor at 997 Hz / -1 dBFS."""
+        if not self.native:
+            self.log("   (THD+N floor may now be latched ~7 dB high until the UPL is power-cycled)")
+            return
+        self.func("RMS")
+        self.sweep(geomspace(10.0, 20000.0, 31), -10.0)
+        self.func("THDN")
+        self.tone(997, -1.0)
+        time.sleep(self.args.settle)
+        self.trig()
+        (v1, u1), (v2, u2) = self.read12()
+        l, r = ratio_db(v1, u1), ratio_db(v2, u2)
+        bad = any(x is not None and x > -106 for x in (l, r))
+        self.log(f"   THD+N floor reset (31-pt RMS sweep): -1 dBFS reads L {fmt(l, '%.1f')} R "
+                 f"{fmt(r, '%.1f')} dB" + ("   <- STILL LATCHED? power-cycle the UPL" if bad else ""))
+
     def sweep(self, freqs, dbfs):
         """Measure the current function at each of `freqs` (log-spaced, as from
         geomspace) at `dbfs`. Returns [(f_played, (v1, u1), (v2, u2)), ...].
@@ -1066,11 +1087,13 @@ def t_thdn(rig, a, fs, ctx):
     rows = []
     for analyzer in a.analyzers:
         rig.configure(fs, analyzer)
+        if analyzer == "A22":
+            rig.unlatch()                         # an earlier 0 dBFS THD+N may have latched it
         # vs frequency @ --freq-level -- BEFORE the level sweep: THD+N of a clipping
         # 0 dBFS tone overdrives the analyzer's notch path and it steps its notch gain
         # down, raising its own THD+N floor from ~-110 to ~-103 dB until the UPL is
-        # power-cycled (*RST, INST2, CAL:ZERO, low levels don't restore it; live
-        # 2026-09-24 on the M51, whose 0 dBFS clips at 0 dB volume).
+        # power-cycled or a native RMS sweep runs (Rig.unlatch; *RST, INST2, CAL:ZERO,
+        # low levels don't restore it; live 2026-09-24/25 on the M51, whose 0 dBFS clips).
         for fn in ("THDN", "THD"):
             rig.func(fn)
             for fa, (v1, u1), (v2, u2) in rig.sweep(geomspace(20, min(20000, 0.45 * fs), 16),
@@ -1085,6 +1108,8 @@ def t_thdn(rig, a, fs, ctx):
                 rig.trig()
                 (v1, u1), (v2, u2) = rig.read12()
                 rows.append((fs, analyzer, "level", L, fn, ratio_db(v1, u1), ratio_db(v2, u2)))
+        if analyzer == "A22" and max(a.levels) >= 0:
+            rig.unlatch()                         # the 0 dBFS THD+N point just latched it
         best = [r for r in rows if r[1] == analyzer and r[2] == "level" and r[4] == "THDN"]
         for ch, name in ((5, "L"), (6, "R")):
             vals = [(r[ch], r[3]) for r in best if r[ch] is not None]

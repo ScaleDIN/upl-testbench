@@ -191,9 +191,14 @@ step"*. Its THD+N floor then sits at **−103 dB instead of ~−110 dB**, and st
 Seen levels ≈ −110 / −105 / −103 dB, consistent with gain steps of 30/12/0 dB. Every `thdn`
 frequency sweep tonight ran after the level sweep's 0 dBFS point and read −104…−107 (or −103):
 **all tonight's THD+N-vs-frequency numbers are floor-limited low**; the M51's own THD+N at
-−1 dBFS is ≈ −114 dB (THD −115 ⊕ noise −121). `thdn` now does frequency first and THD+N's 0 dBFS
-last. Once, the latch cleared without a power cycle (between the 23:13 `thdn` and 23:37);
-what did it is unknown. **If THD+N readings look ~6 dB worse than expected, power-cycle the UPL.**
+−1 dBFS is ≈ −114 dB (THD −115 ⊕ noise −121). **Remote reset found (2026‑09‑25, 00:00): a native 31-point RMS sweep clears
+the latch on both channels** — 4/4 trials of latch (THD+N at 0 dBFS, reads −103) → sweep (reads
+−109/−110); a 3-point sweep cleared only CH1. (It's also what cleared it "by itself" earlier: the
+23:37 cross-check began with an RMS sweep.) Fixed small ranges and a 44.1k rate change don't.
+`dac_test.py` `Rig.unlatch()` runs that sweep and re-checks the floor; `thdn` calls it at the start
+and after its 0 dBFS point, and now does frequency before level. Live 00:03: both resets read
+−109/−110, THD+N vs frequency −106…−112 dB (vs −102…−105 latched), DR 125.4/125.5 dB A.
+**If THD+N readings look ~6 dB worse than expected: run any native RMS sweep, or power-cycle.**
 - Not fixed: `multitone` lets its two lowest tones share neighbouring bins (the 1.5 dB "tone span").
 - Polarity replies `'1 FS'` on both channels; meaning still unconfirmed against the panel.
 
