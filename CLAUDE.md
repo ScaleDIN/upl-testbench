@@ -358,9 +358,29 @@ option tokens, which is now identified above — previously flagged as unknown.)
 - **Behringer DCX2496** (DSP speaker management, XLR analog + AES/EBU): verify crossover filter
   slopes via UPL sweep, THD+N/noise/dynamic range of its converters, latency, channel matching,
   digital‑in→analog‑out (via B29).
-- **SPDIF DAC**: UPL generates SPDIF (B29) → DAC → UPL analog analyzer: THD+N@0dBFS, −60 dBFS
-  linearity, dynamic range, frequency response, DC offset, across 44.1/48/96 kHz. (No jitter
-  analysis — needs B22.)
+- **SPDIF DAC = Elektor "Audio DAC 2000"** (T. Giesberts, Elektor Electronics 11/99, 12/99,
+  1/2000; user has the article PDFs, e99b058 / e99c078 / e001012).
+  Original: CS8414 → DF1704 8× filter → PCM1704 ×2 → OPA627 I/V (2k49 ‖ 47 pF) → 3rd-order
+  passive filter (Butterworth 26 kHz, or Bessel 42 kHz at 88.2/96, relay Re2/Re3 per channel,
+  selected by the GAL's DBW from the CS8414's rate detection) → OPA627 buffer → 100 Ω → mute
+  relay Re1. De-emphasis driven by the received channel-status bit (DF1704 SF0/SF1 on DIP S3).
+  **User's mods:** I/V op-amps → **AD797**; **AD1896 ASRC** added between receiver and DAC board.
+  Consequences worth remembering: the AD797 (110 MHz) has a reputation for HF instability in I/V
+  service — prime suspect for erratic/unequal channels, check with a scope; DBW/de-emphasis still
+  follow the *input* rate, not the ASRC's output rate; the ASRC should make the jitter tests show
+  near-total rejection; DF1704 max input rate is 96 kHz, so the ASRC output must be ≤ 96 kHz.
+  Published spec: 2.1 V rms, −0.94 dB @20 kHz (−0.66 at 88.2/96), Zout 100 Ω, THD+N 0.001 %
+  (48k/24-bit, B=80k), S/N ≥ 114 dBA, SMPTE IMD 0.0035 %, separation > 115 dB @1 kHz —
+  kept in `measurements/dut_specs/elektor-dac2000.json` (`--dut-spec elektor-dac2000`) — the test
+  script itself stays DAC-agnostic, per the user. (44.1/48/88.2/96 kHz): UPL generates SPDIF
+  (B29) → DAC → UPL analog analyzer.
+  User reports (2026‑09‑24) that it "sounds great but measures strange": **frequency response
+  all over the place and unequal between channels.** Test suite written for it:
+  `measurements/spdif_dac_test.py` (see README) — FR as broadband *and* selective RMS, repeated,
+  with an automatic diagnosis (L/R mismatch vs image/hum contamination vs non-repeatability vs
+  NOS sinc droop), plus THD+N, images, IMD, crosstalk, Zout, polarity, **jitter transfer via B22**
+  (the old "needs B22" note here was stale — B22 is fitted), and interface robustness. Not yet
+  run live; diagnosis logic verified offline against a simulated faulty DAC.
 - **Turntable** (needs test LP): wow & flutter, speed error, rumble, RIAA conformance, crosstalk.
 - **miniDSP UMIK‑1** (USB calibrated mic): does NOT connect to the UPL (USB audio). It's the
   acoustic front‑end for the **laptop** (`audio_tests.py`) — apply its per‑serial cal file; do

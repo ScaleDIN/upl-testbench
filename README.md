@@ -325,6 +325,62 @@ python measurements/m51_jitter_fft.py --fs 44100 --device 16 -o results/m51_jitt
 All M51 scripts default `--m51-port COM2 --upl-port COM7` — override if your ports differ.
 `--fs` is required on most of them (the whole point is comparing behavior across sample rates).
 
+## S/PDIF DAC characterization (`measurements/spdif_dac_test.py`)
+
+For any DAC with an S/PDIF (coax/optical) or AES3 input. Unlike the M51 scripts, the **UPL's
+own digital generator (B29) is the source**: bit-exact, sample rate set by the UPL, and the
+interface can be degraded on purpose (jitter via B22, 100 m cable simulator, low signal
+voltage, off-nominal sample rate, 16/20/24-bit words).
+
+Physical setup: UPL digital out (BNC unbal for coax, XLR via 110→75 Ω transformer, or optical)
+→ DAC input; DAC L/R analog out → UPL analyzer inputs 1/2. RCA outputs go into the XLR inputs
+via adapters; the script uses `INP:LOW FLOat` (see the DCX balanced/single-ended test for why),
+`--ground` to change it.
+
+```bash
+python measurements/spdif_dac_test.py --dry-run all                  # offline: runs everything
+python measurements/spdif_dac_test.py --port COM7 check              # lock, 0 dBFS level, balance, DC
+python measurements/spdif_dac_test.py --port COM7 fr                 # frequency response, diagnosed
+python measurements/spdif_dac_test.py --port COM7 --fs 44100 fft --images
+python measurements/spdif_dac_test.py --port COM7 --label mydac all  # the lot -- tens of minutes (untimed)
+```
+
+| Test | What it answers |
+|---|---|
+| `check` | Does it lock at each rate? 0 dBFS output (V), L−R balance, DC offset |
+| `fr` | Response 10 Hz–20 kHz per rate, both channels, as **broadband RMS and generator-tracking selective RMS**, repeated. Its summary says whether the problem is L/R mismatch, non-signal energy inflating the RMS reading (images, hum, noise), non-repeatability, or a sinc droop (NOS DAC) |
+| `thdn` | THD+N and THD vs level and vs frequency; AES17 dynamic range; idle noise (and whether it mutes on digital zero) |
+| `fft` / `fft --images` | Harmonic signature and hum; with `--images`, a 19 kHz tone on the 100 kHz analyzer to see reconstruction-filter images at k·fs ± f |
+| `imd` | SMPTE 60 Hz + 7 kHz 4:1, CCIF 19 + 20 kHz |
+| `xtalk`, `zout`, `polarity` | Crosstalk both ways; output impedance (200 kΩ vs 600 Ω load); absolute polarity |
+| `jitter` | Jitter transfer: sinusoidal jitter (default 0.1 UI) at 100 Hz–8 kHz on an fs/4 tone; sideband level vs the unrejected prediction 20·log(π·f0·J) gives rejection vs jitter frequency. `--cable` repeats with the cable simulator |
+| `interface` | Minimum input voltage, sample-rate lock range (±100 ppm to ±5 %), whether bits beyond 16 are used |
+| `stability` | For "erratic, and different per channel": idle noise 22 kHz vs 100 kHz per channel (HF instability shows as asymmetric ultrasonic noise), level spread over repeated readings, 20 kHz/0 dBFS THD+N on the wide analyzer, output impedance ×3 (dirty relay contacts show as high or wandering). `--monitor 60` then streams L/R level while you tap relays and flex cables |
+| `jtest` | Dunn J-test (fs/4 tone + 1-LSB square at fs/192) at 24 and 16 bit, as ASR/Stereophile show it. The 192-sample waveform is uploaded as an ARB time-table file (`MMEM:DATA`, checked with `MMEM:CHECK?`) |
+| `multitone` | 17-tone multisine (the UPL's limit; ASR uses 32), tones on FFT bins; worst product and floor between tones |
+| `linearity` | Level error 0 to −130 dBFS, 1 % selective; reports how far down it stays within 0.1 dB |
+| `imdlevel` | SMPTE and CCIF IMD vs level, −60 to 0 dBFS |
+| `filter` | White noise through the DAC, wideband FFT — the reconstruction filter's shape and image-band leakage |
+
+The test is the same for every DAC. Optionally, `--dut-spec <name>` prints a DUT's published
+figures under each result, from `measurements/dut_specs/<name>.json` (format in that folder's
+README). One is included: `elektor-dac2000` (Elektor Audio DAC 2000, Elektor Electronics
+11/99–1/2000).
+
+**Comparing with Audio Science Review:** the last five tests plus `thdn` (which prints SINAD =
+−THD+N at 0 dBFS), `fr` and `fft` cover ASR's standard DAC set. Set the DAC to 2 V unbalanced /
+4 V balanced at 0 dBFS first if it has a volume control. Caveat: the UPL's own THD+N floor is
+about −103 to −106 dB (loopback), far above ASR's APx555, so SINAD numbers past ~100 dB are the
+UPL's limit, not the DAC's. Everything else (response, images, jitter lines, linearity,
+crosstalk) stays comparable.
+
+88.2/96 kHz need B29's high rate mode (`CONF:DAI HRM`), which Vol.2 says also degrades the analog
+analyzer somewhat, so it's switched on only for those rates and back to `BRM` at the end. Output
+goes to `results/spdif_dac/<label>_<timestamp>/` (git-ignored): a CSV per test plus
+`summary.txt`. **Not yet run against hardware** — every config command is error-checked, and a
+list of anything the UPL rejected is printed at the end, so the first live `check` shows what
+needs fixing.
+
 ## Analyzer filter checks (`measurements/filter_test.py`)
 
 Internal loopback only (`INP:TYPE GEN2`), so nothing needs to be patched. Two parts:

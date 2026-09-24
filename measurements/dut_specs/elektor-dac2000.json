@@ -1,0 +1,14 @@
+{
+  "name": "Elektor Audio DAC 2000 (original build: OPA627 I/V, no SRC)",
+  "notes": "T. Giesberts, Elektor Electronics 11/99, 12/99, 1/2000. CS8414 -> DF1704 8x -> PCM1704 -> OPA627 I/V (2k49 || 47p) -> 3rd-order passive filter (Butterworth 26 kHz; Bessel 42 kHz at 88.2/96, relay-selected from the receiver's rate detection) -> OPA627 buffer -> 100 Ohm -> mute relay. Audio Precision figures from part 3.",
+  "fullscale": "2.1 V rms at 0 dBFS",
+  "dc": "<= 10-20 mV (OPA627 I/V)",
+  "fr20k": {"base": -0.94, "high": -0.66},
+  "zout": "100 Ohm (R40/R42); much higher, or spread between repeats, = relay contact resistance",
+  "thdn": "0.0016% (-95.9 dB) 44.1k/16-bit; 0.001% (-100 dB) 48k/24-bit (B=80 kHz); 0.0008% (-101.9 dB) 96k (B=22 kHz)",
+  "snr": ">= 114 dBA",
+  "dr": "> 100 dB",
+  "imd": "SMPTE 60 Hz/7 kHz at 0 dB: 0.0035% (-89.1 dB)",
+  "xtalk": "> 115 dB at 1 kHz, > 88 dB at 20 kHz (with the screen between channels fitted)",
+  "linearity": "0.2 dB error at -110 dBFS (16-bit, dithered)"
+}
