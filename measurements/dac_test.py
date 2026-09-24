@@ -99,7 +99,7 @@ import time
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from upl_capture import connect, DryRunUPL, read_fft, preserve_state  # noqa: E402
+from upl_capture import connect, DryRunUPL, read_fft, preserve_state, parse_values  # noqa: E402
 from report import Run, add_output_args, is_na, SERIES  # noqa: E402
 
 SENTINEL = 9e36
@@ -353,6 +353,8 @@ class Rig:
         self.fixed_sel = False
         self.state = None           # (fs, analyzer) currently configured
         self.rejected = []
+        # frequency sweeps on the UPL's own sweep engine (UPL generator only)
+        self.native = source == "upl" and not getattr(args, "stepped", False)
 
     # --- low level
     def q(self, cmd):
@@ -385,6 +387,56 @@ class Rig:
     def trig(self):
         self.u.write("INIT:CONT OFF;*WAI")
         self.q("*OPC?")
+
+    def sweep(self, freqs, dbfs):
+        """Measure the current function at each of `freqs` (log-spaced, as from
+        geomspace) at `dbfs`. Returns [(f_played, (v1, u1), (v2, u2)), ...].
+
+        Native (UPL generator): one sweep on the UPL's own engine -- the nsweep
+        sequence, SWE1 + DISP:TRAC:FEED, one command per line with *OPC? (the PL2303
+        doubles bytes otherwise). Checked live 2026-09-24 against the stepped loop on
+        the M51: FR within 0.02 dB, 31 points in 3 s instead of ~30 s.
+        Trace units are not the SENS:DATA? ones: RMS in V, THD/THD+N in % (even with
+        SENS:UNIT DB), so ratios come back tagged "%" and ratio_db() converts them.
+        Stepped otherwise (--stepped, or the PC source)."""
+        a = self.args
+        if not self.native or len(freqs) < 2:
+            out = []
+            for f in freqs:
+                fa = self.tone(f, dbfs)
+                time.sleep(a.settle)
+                self.trig()
+                out.append((fa,) + tuple(self.read12()))
+            return out
+        self.tone(freqs[0], dbfs)
+        for c in ("FORM ASC", "DISP:TRAC:OPER CURV", "DISP:TRAC:FEED 'SENS:DATA'",
+                  "DISP:TRAC2:FEED 'SENS:DATA2'", "DISP:TRAC:X:SPAC LOG"):
+            self.setc(c)
+        self.u.set_timeout(max(a.timeout, 120))
+        try:
+            for c in ("SOUR:SWE:MODE AUTO", "SOUR:FREQ:MODE SWE1",
+                      f"SOUR:FREQ:STAR {freqs[0]:.4f} HZ", f"SOUR:FREQ:STOP {freqs[-1]:.4f} HZ",
+                      "SOUR:SWE:FREQ:SPAC LOG", f"SOUR:SWE:FREQ:POIN {len(freqs)}"):
+                self.setc(c, slow=True)
+            self.setc("DISP:CONF AP")
+            self.u.set_timeout(max(a.timeout, 60 + 5 * len(freqs)))
+            self.trig()
+            self.u.set_timeout(a.timeout)
+            y1 = parse_values(self.q("TRAC? TRAC1"), "TRAC? TRAC1")
+            y2 = parse_values(self.q("TRAC? TRAC2"), "TRAC? TRAC2")
+            x = parse_values(self.q("TRAC? LIST1"), "TRAC? LIST1")
+        finally:
+            self.u.set_timeout(a.timeout)
+            self.setc("SOUR:FREQ:MODE FIX", slow=True)     # else plain SOUR:FREQ misbehaves
+        unit = "%" if self.func_cur in ("THD", "THDN") else "V"
+
+        def val(v):
+            return None if (v <= 0 or v > SENTINEL) else v
+        out = []
+        for f in freqs:
+            i = min(range(len(x)), key=lambda k: abs(math.log(x[k] / f)))
+            out.append((x[i], (val(y1[i]), unit), (val(y2[i]), unit)))
+        return out
 
     def func(self, name):
         if name != self.func_cur:
@@ -510,6 +562,7 @@ class Rig:
 
     def cleanup(self):
         self.src.cleanup()
+        self.func("RMS")                             # SENS:FILT OFF is -200 under RMSS/THD/POL
         for c in ("INP:IMP R200K", "SENS:FILT OFF"):
             self.setc(c, quiet=True)
 
@@ -950,17 +1003,17 @@ def t_fr(rig, a, fs, ctx):
             time.sleep(a.settle)
             rig.trig()
             (r1, _), (r2, _) = rig.read12()
+            # A100 can't install the tracking bandpass this low: 111 "RMS Select
+            # bandpass is not installable!" at <= 53 Hz, fine at 69 Hz (live)
+            skip = [f for f in freqs if mode == "RMSS" and analyzer == "A100" and f < A100_SEL_MIN]
+            meas = {f: m for f, m in zip([f for f in freqs if f not in skip],
+                                         rig.sweep([f for f in freqs if f not in skip], a.level))}
             for f in freqs:
-                if mode == "RMSS" and analyzer == "A100" and f < A100_SEL_MIN:
-                    # A100 can't install the tracking bandpass this low: 111 "RMS Select
-                    # bandpass is not installable!" at <= 53 Hz, fine at 69 Hz (live)
+                if f in skip:
                     data[(p, mode, f)] = (None, None, None)
                     rows.append((fs, analyzer, p + 1, mode, round(f, 2), None, None, "", "", ""))
                     continue
-                fa = rig.tone(f, a.level)
-                time.sleep(a.settle)
-                rig.trig()
-                (v1, _), (v2, _) = rig.read12()
+                fa, (v1, _), (v2, _) = meas[f]
                 d1, d2 = db(v1, r1), db(v2, r2)
                 lr = db(v1, v2) if v1 and v2 else None
                 data[(p, mode, f)] = (d1, d2, lr)
@@ -1013,8 +1066,18 @@ def t_thdn(rig, a, fs, ctx):
     rows = []
     for analyzer in a.analyzers:
         rig.configure(fs, analyzer)
-        # vs level @ 997 Hz
+        # vs frequency @ --freq-level -- BEFORE the level sweep: THD+N of a clipping
+        # 0 dBFS tone overdrives the analyzer's notch path and it steps its notch gain
+        # down, raising its own THD+N floor from ~-110 to ~-103 dB until the UPL is
+        # power-cycled (*RST, INST2, CAL:ZERO, low levels don't restore it; live
+        # 2026-09-24 on the M51, whose 0 dBFS clips at 0 dB volume).
         for fn in ("THDN", "THD"):
+            rig.func(fn)
+            for fa, (v1, u1), (v2, u2) in rig.sweep(geomspace(20, min(20000, 0.45 * fs), 16),
+                                                    a.freq_level):
+                rows.append((fs, analyzer, "freq", round(fa, 1), fn, ratio_db(v1, u1), ratio_db(v2, u2)))
+        # vs level @ 997 Hz; THD (unaffected by the notch gain) first, THD+N's 0 dBFS last
+        for fn in ("THD", "THDN"):
             rig.func(fn)
             for L in a.levels:
                 rig.tone(997, L)
@@ -1022,15 +1085,6 @@ def t_thdn(rig, a, fs, ctx):
                 rig.trig()
                 (v1, u1), (v2, u2) = rig.read12()
                 rows.append((fs, analyzer, "level", L, fn, ratio_db(v1, u1), ratio_db(v2, u2)))
-        # vs frequency @ --freq-level
-        for fn in ("THDN", "THD"):
-            rig.func(fn)
-            for f in geomspace(20, min(20000, 0.45 * fs), 16):
-                rig.tone(f, a.freq_level)
-                time.sleep(a.settle)
-                rig.trig()
-                (v1, u1), (v2, u2) = rig.read12()
-                rows.append((fs, analyzer, "freq", round(f, 1), fn, ratio_db(v1, u1), ratio_db(v2, u2)))
         best = [r for r in rows if r[1] == analyzer and r[2] == "level" and r[4] == "THDN"]
         for ch, name in ((5, "L"), (6, "R")):
             vals = [(r[ch], r[3]) for r in best if r[ch] is not None]
@@ -1621,6 +1675,8 @@ def main():
     p.add_argument("--relock", type=float, default=2.0, help="seconds to let the DAC relock")
     add_output_args(p, default_label="dac")
     p.add_argument("--no-reset", action="store_true", help="skip the initial *RST")
+    p.add_argument("--stepped", action="store_true",
+                   help="fr/thdn: step the frequency from the PC instead of the UPL's own sweep")
     p.add_argument("--preserve", action="store_true",
                    help="snapshot the UPL setup first and restore it at the end (MMEM:STOR:STAT 2)")
     p.add_argument("--dut", choices=sorted(DUTS),

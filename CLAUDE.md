@@ -165,8 +165,30 @@ table), so optical needs no setting. Results in `results/dac/optical_*` and `m51
   stepping. `fr --wide` skips A100 selective below 60 Hz; the A22 sweep covers the bottom.
 - Off-bin tones (11 025 Hz at 44.1k on the 5.86 Hz grid) leave a Blackman-Harris skirt at −92 dBc
   out to ~60 Hz; the J-test spur search now excludes ±16 bins.
-- `fr` / `thdn` are still host-stepped (~1 s/point over serial). Porting them to the native sweep
-  (`nsweep` machinery) is the obvious speed-up, not done yet.
+- **`fr` and the `thdn` frequency sweep now use the UPL's native sweep** (`Rig.sweep()`, the
+  `nsweep` sequence; `--stepped` forces the old host loop, the PC source always steps). Live on the
+  M51 at 48k: FR identical to the stepped run (10 Hz −0.05, 20 kHz +0.06 dB, L−R 0.01, spread
+  0.003 dB); a standalone cross-check agreed within 0.021 dB, 31 points in **3.1 s**. But a whole
+  `fr` run only drops to ~1 min 50 s: each sweep-parameter command costs 2–3 s, six per sweep, four
+  sweeps. Sending them only when they change is the next speed-up. **Trace units differ from
+  `SENS:DATA?`: THD/THD+N traces come back in %** even with `SENS:UNIT? DB`. FFT straight after a
+  native sweep works (the curve display mode doesn't break it).
+- **"WAIT FOR CAL: ANA OFFSET"** on the UPL screen during sweeps: the cyclic analyzer DC-offset
+  calibration is due but disabled while a sweep runs (Vol.1 p.2.52). Expected; it runs afterwards.
+
+**THD+N floor latch — the big UPL finding of the night.** THD+N of a *clipping* 0 dBFS tone (the M51
+at 0 dB volume) makes the analog analyzer (A22, `SENS:FUNC:DMOD PREC`, the default) drop its
+notch gain — Vol.1 2.6.5: *"if the analyzer is overdriven, the notch gain is reduced step by
+step"*. Its THD+N floor then sits at **−103 dB instead of ~−110 dB**, and stays there: `*RST`,
+`INST2 A100`→`A22`, `CAL:ZERO:AUTO ONCE`, FAST→PREC and low-level signals did **not** restore it.
+**A plain power cycle did** (−109.1/−110.4 dB straight after). THD, noise and FFT are unaffected
+(THD −115…−117, idle noise 3.3 µV, floor −125 dBc in both states), so only THD+N readings lie.
+Seen levels ≈ −110 / −105 / −103 dB, consistent with gain steps of 30/12/0 dB. Every `thdn`
+frequency sweep tonight ran after the level sweep's 0 dBFS point and read −104…−107 (or −103):
+**all tonight's THD+N-vs-frequency numbers are floor-limited low**; the M51's own THD+N at
+−1 dBFS is ≈ −114 dB (THD −115 ⊕ noise −121). `thdn` now does frequency first and THD+N's 0 dBFS
+last. Once, the latch cleared without a power cycle (between the 23:13 `thdn` and 23:37);
+what did it is unknown. **If THD+N readings look ~6 dB worse than expected, power-cycle the UPL.**
 - Not fixed: `multitone` lets its two lowest tones share neighbouring bins (the 1.5 dB "tone span").
 - Polarity replies `'1 FS'` on both channels; meaning still unconfirmed against the panel.
 
