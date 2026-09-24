@@ -374,6 +374,12 @@ option tokens, which is now identified above — previously flagged as unknown.)
   kept in `measurements/dut_specs/elektor-dac2000.json` (`--dut-spec elektor-dac2000`) — the test
   script itself stays DAC-agnostic, per the user. (44.1/48/88.2/96 kHz): UPL generates SPDIF
   (B29) → DAC → UPL analog analyzer.
+  **UPL digital output stage (Service Manual Vol.2 p.247, "Output Circuit, Front Panel
+  1078.4223", 2026‑09‑24):** UNBAL = CLC430 op-amp → 100 nF → 1:1 Mini-Circuits T1‑6T transformer
+  T2 → R82‖R83 (150‖150 = **75 Ω** series) → BNC, secondary floating (R283 ground link not fitted).
+  BAL = transformer T3 → 2 × (110‖110) = 55 Ω per leg = **110 Ω** → XLR. So the BNC is a proper
+  75 Ω S/PDIF source: coax DACs need no 110→75 Ω transformer (the README said otherwise until
+  this date). Drawings are for the B2 (1078.4100); B2 and B29 share the same output board (user).
   User reports (2026‑09‑24) that it "sounds great but measures strange": **frequency response
   all over the place and unequal between channels.** Test suite written for it:
   `measurements/spdif_dac_test.py` — **renamed `dac_test.py` on 2026‑09‑24, with a `--source pc`

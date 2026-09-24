@@ -279,8 +279,11 @@ Most DACs need no control: set them up by hand and the suite treats them as a bl
 `--volume` for the run and restores it, and enables **`volsweep`** (THD+N/THD/level vs the DUT's
 volume). Adding another DUT means one small class in `dac_test.py`'s `DUTS`.
 
-Physical setup: UPL digital out (BNC unbal for coax, XLR via 110→75 Ω transformer, or optical)
-→ DAC input; DAC L/R analog out → UPL analyzer inputs 1/2. RCA outputs go into the XLR inputs
+Physical setup: UPL digital out → DAC input. For a coax (S/PDIF) input use the UPL's **UNBAL BNC
+output directly** — it is already a transformer-coupled 75 Ω source (Service Manual Vol.2 p.247:
+CLC430 driver → 1:1 transformer T2 → 150‖150 Ω = 75 Ω → BNC; Vol.1 p.2.74: level set as Vpp
+into 75 Ω, 0–2.125 V), so no 110→75 Ω transformer is needed. BNC→RCA adapter +
+75 Ω coax. Use BAL XLR (110 Ω) for AES3 inputs, TOSLINK for optical. DAC L/R analog out → UPL analyzer inputs 1/2. RCA outputs go into the XLR inputs
 via adapters; the script uses `INP:LOW FLOat` (see the DCX balanced/single-ended test for why),
 `--ground` to change it.
 
