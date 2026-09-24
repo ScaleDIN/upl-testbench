@@ -31,27 +31,39 @@ package — that's a different, unrelated library):
 python -m pip install pyserial
 ```
 
-Nothing else is required — no numpy, no other dependencies for this particular script.
+Nothing else is required — no numpy, no other dependencies for this particular script. **Only if
+you'll connect over GPIB** instead of serial (see step 3), also install `pyvisa` plus your GPIB
+adapter's VISA library (for the Agilent/Keysight 82357B: the Keysight IO Libraries Suite, then
+reboot):
+
+```bash
+python -m pip install pyvisa
+```
 
 ## 2. Get the files
 
 You need exactly two files, in the **same folder**:
 
 - `upl_selftest.py` — the script itself
-- `upl_capture.py` — supplies the `UPL` serial-communication class `upl_selftest.py` is built on
+- `upl_capture.py` — supplies the serial and GPIB communication classes `upl_selftest.py` is built on
 
 Both are in this repository. If you only have `upl_selftest.py`, go back and grab
 `upl_capture.py` too — the script will fail to start without it (`ImportError`).
 
 ## 3. Hardware setup
 
-- **A USB-to-serial adapter** connecting this PC to the UPL's rear **COM2** port. An
-  FTDI-chipset adapter is recommended — some Prolific-chipset adapters have shown intermittent
-  driver issues in testing (see the Gotchas section below if a port that worked before suddenly
-  won't open).
-- **On the UPL itself**, via its OPTIONS panel: set remote control destination to **COM2** (not
-  IEC-bus), and note the baud rate shown there — you'll pass the same number to `--baud` below.
-  (115200 is a good default if you're free to choose; see the baud note further down.)
+Connect **either** way; the script takes both.
+
+- **Serial (the usual way):** a USB-to-serial adapter connecting this PC to the UPL's rear
+  **COM2** port. An FTDI-chipset adapter is recommended — some Prolific-chipset adapters have
+  shown intermittent driver issues in testing (see the Gotchas section below if a port that worked
+  before suddenly won't open). On the UPL's OPTIONS panel, set remote control destination to
+  **COM2** (not IEC-bus), and note the baud rate shown there — you'll pass the same number to
+  `--baud` below. (115200 is a good default if you're free to choose; see the baud note further
+  down.)
+- **GPIB:** a GPIB adapter (tested with an Agilent/Keysight 82357B) to the UPL's IEC-bus
+  connector. On the OPTIONS panel set remote control destination to **IEC**, address **20**.
+  Baud doesn't apply.
 - **Remove any cables from the UPL's generator and analyzer front-panel connectors** before
   running. This test is entirely internal loopback — the UPL measures its own generator — and
   the original front-panel self-test carries the same warning.
@@ -68,6 +80,13 @@ python -c "import serial.tools.list_ports as lp; print([(p.device, p.description
 Look for your adapter's description in the list (e.g. "USB Serial Port (COM7)") and use that
 `COMx` value as `--port` below.
 
+**Over GPIB** the port is a VISA resource name instead, normally `GPIB0::20::INSTR` (board 0,
+address 20). To list what VISA sees:
+
+```bash
+python -c "import pyvisa; print(pyvisa.ResourceManager().list_resources())"
+```
+
 ## 5. How to run it
 
 ```bash
@@ -79,6 +98,9 @@ That's the whole thing for a default run. Useful variations:
 ```bash
 # different port or baud
 python upl_selftest.py --port COM7 --baud 115200
+
+# over GPIB instead of serial (--baud is ignored)
+python upl_selftest.py --port GPIB0::20::INSTR
 
 # name the report file yourself instead of the auto timestamp
 python upl_selftest.py --port COM7 -o results/selftest_2026-09-23.txt
