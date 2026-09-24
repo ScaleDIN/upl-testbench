@@ -129,6 +129,42 @@ Facts learned along the way:
 - **R&S-parity version live 22:30: PASS 137/137** (`results/selftest/rs_parity_20260924-223020/`), no noise
   retry needed, setup restored. B1 CH2 −0.14 to −0.19 %, B1 frequency within 0.04 %.
 
+## Elektor DAC 2000 over optical — first live `dac_test.py` run (2026‑09‑25, 00:18)
+
+UPL B29 → optical → Elektor DAC (AD797 I/V, AD1896 ASRC) → RCA→XLR adaptors → UPL A22.
+Results in `results/dac/elektor_quick_*`.
+- **First attempt, not locked:** no signal (9 µV), but **~2.5 V DC on both outputs** (L 2.50–2.69,
+  R 2.21–2.40 V; confirmed with a separate DC read). Once locked: DC +0.1 / −11 mV. So with no lock the
+  mute relay Re1 isn't muting and the DAC outputs a near-full-scale constant (≈85 % of 3.0 V peak) —
+  looks like a stuck code from the ASRC/DAC path. Hazard for a power amp downstream.
+- **Locked:** full scale 2.08/2.09 V, L−R 0.03 dB, repeatable to 0.005 dB.
+- **FR, the real fault — left channel, 96 kHz only:** R follows the spec (−0.65 dB @ 20 kHz, Bessel
+  path), **L rises steadily from ~3 kHz to +0.68 dB @ 20 kHz** (L−R +1.32 dB). At 44.1/48 (Butterworth
+  path) L is only 0.17–0.2 dB below R (−1.12 vs −0.93/−0.96, spec −0.94). The I/V stage (AD797) is
+  rate-independent, so a fault that depends on rate points at **L's rate-switched output filter: relay
+  Re2/Re3 contacts or a component in L's 96k (Bessel) network**, not the AD797.
+- 44.1k: L's broadband RMS reads +1.76 dB over selective at 19.8 kHz (R +0.28) — extra non-signal
+  energy on L near the band edge. L's 1 kHz reference also toggled 0.6606 ↔ 0.6583 V between passes
+  (R steady): consistent with a marginal contact in L's path.
+- **88.2 kHz: the filter selection flips mid-run.** The four sweeps alternated Bessel (L +0.70/R −0.63 dB
+  @ 20 kHz) → Butterworth (−1.07/−0.94) → Butterworth → Bessel. Both channels flip together, so the
+  switching *command* (the GAL's DBW, from the receiver's rate detection) is unstable at 88.2k, not a
+  relay. 96k stayed on Bessel in both passes. The L Bessel rise shows at 88.2k too, so it's the L
+  high-rate network, not the rate. Rising ~f² from 3 kHz = a higher-Q (under-damped) section: suspect
+  a wrong/open switched capacitor or relay contact on L's Bessel side.
+- **AD1896 ASRC already removed** before these runs (user, 2026‑09‑25): all results above are
+  CS8414 → DF1704 direct. So neither the 88.2k flipping nor the unlocked 2.5 V DC is an ASRC effect.
+- **After 30 × 44.1↔96k relay-exercise cycles** (scratch script, `CONF:DAI`/`OUTP:SAMP:MODE` toggled,
+  generator at 0 FS; `results/dac/elektor_after_exercise_*`): 88.2k held Bessel in all 4 sweeps;
+  44.1k L−R −0.20 → −0.12 dB; **L Bessel rise unchanged (+0.69/+0.70 dB, L−R +1.32)** → a component,
+  not contact resistance. New: at 96k pass 1 **L alone dropped** (1 kHz ref 0.581 then 0.626 V vs
+  0.660; one 20 kHz point −4.7 dB), then recovered — an intermittent in L's path (joint or contact).
+- **Board photo (user, 2026‑09‑25): I/V op-amps are now LT1028** (AD797s swapped out); buffers marked
+  `35ZP8R7`; per channel 330p/4n7/2n2 (RS) + 1n5 (LCR) + 1n0 (RS) filter caps; filter relays Siemens
+  V23042-A2003-B201 (12 V), one per channel, plus the mute relay top left.
+- Images (CH1, A100): ≤ −102 dBc, fine. Hum ~−69 dBc re 1.6 V at 44.1k (−80 at 96k), varying between
+  runs — possibly the RCA-adaptor ground loop (see DCX single-ended test); not yet separated.
+
 ## NAD M51 over optical, 44.1–96 kHz — first live `dac_test.py` run (2026‑09‑24, late)
 
 UPL B29 generator → **optical** → M51 (volume 0 dB) → balanced out → UPL analog analyzer, UPL on
@@ -550,7 +586,7 @@ option tokens, which is now identified above — previously flagged as unknown.)
   passive filter (Butterworth 26 kHz, or Bessel 42 kHz at 88.2/96, relay Re2/Re3 per channel,
   selected by the GAL's DBW from the CS8414's rate detection) → OPA627 buffer → 100 Ω → mute
   relay Re1. De-emphasis driven by the received channel-status bit (DF1704 SF0/SF1 on DIP S3).
-  **User's mods:** I/V op-amps → **AD797**; **AD1896 ASRC** added between receiver and DAC board.
+  **User's mods:** I/V op-amps → **AD797**, since replaced by **LT1028** (seen on the board 2026‑09‑25); **AD1896 ASRC** added between receiver and DAC board.
   Consequences worth remembering: the AD797 (110 MHz) has a reputation for HF instability in I/V
   service — prime suspect for erratic/unequal channels, check with a scope; DBW/de-emphasis still
   follow the *input* rate, not the ASRC's output rate; the ASRC should make the jitter tests show
