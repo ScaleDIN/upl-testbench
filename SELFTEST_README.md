@@ -102,8 +102,11 @@ python upl_selftest.py --port COM7 --baud 115200
 # over GPIB instead of serial (--baud is ignored)
 python upl_selftest.py --port GPIB0::20::INSTR
 
-# name the report file yourself instead of the auto timestamp
-python upl_selftest.py --port COM7 -o results/selftest_2026-09-23.txt
+# name the run (the results folder becomes results/selftest/after_recal_<timestamp>/)
+python upl_selftest.py --port COM7 --label after_recal
+
+# also copy the text report to a file of your choosing
+python upl_selftest.py --port COM7 -o selftest_2026-09-23.txt
 
 # if a run shows a spurious "N/A" reading right after a frequency change,
 # give the generator more time to settle before the first measurement
@@ -139,8 +142,18 @@ COM2 baud to match, or override with `--baud` if you're running it at something 
 4. Prints every reading live as it goes (set value, measured value, deviation, tolerance, and a
    `<-- OUT OF TOL` flag on anything that fails), then a summary listing every out-of-tolerance
    reading, then `OVERALL: PASS` or `OVERALL: FAIL`.
-5. Writes the identical text to a report file — default name
-   `upl_selftest_<YYYYMMDD_HHMMSS>.txt` in the current folder, or your own path via `-o`.
+5. Saves everything to a results folder, `results/selftest/<label>_<YYYYMMDD-HHMMSS>/`
+   (label `selftest` unless you give `--label`; `--outdir DIR` to put it elsewhere):
+   - `report.html`: open it in a browser. The headline ("PASS: 121/121 readings within
+     tolerance"), any out-of-tolerance readings first, then one table per section with set,
+     measured, deviation, tolerance and a pass/FAIL mark on every reading.
+   - `report.txt`: the same text the console showed, as the selftest has always written it.
+   - `readings.csv`: every reading, one row each, for a spreadsheet or comparing with an
+     earlier run.
+   - `summary.txt`: the full console output.
+
+   `results/index.html` lists every run, so successive selftests line up by date. `-o FILE` also
+   copies the text report to `FILE`.
 
 Takes a few minutes end-to-end (121 readings; section 3 alone is 48 of them).
 

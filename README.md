@@ -12,6 +12,7 @@ For the UPL's own self-test, see the standalone **[SELFTEST_README.md](SELFTEST_
 **Contents**
 
 - [Setup](#setup): install, and connecting to the UPL over **serial or GPIB**
+- [Where results go](#where-results-go): one folder per run, with a readable `report.html`
 - [Core control libraries](#core-control-libraries): `upl_capture.py` and the UPL basics
   (dry run, native sweep, FFT paging, `--preserve`, backups)
 - [Data-egress tools](#data-egress-tools-getting-files-off-the-upl): getting files off the UPL
@@ -25,7 +26,7 @@ For the UPL's own self-test, see the standalone **[SELFTEST_README.md](SELFTEST_
 ## Setup
 
 ```bash
-python -m pip install pyserial numpy scipy sounddevice soundfile
+python -m pip install pyserial numpy scipy sounddevice soundfile matplotlib
 python -m pip install pyvisa          # only if you'll use GPIB (see below)
 ```
 
@@ -68,6 +69,43 @@ and disable "allow the computer to turn off this device" under that device's and
 Hub's Power Management in Device Manager. See `CLAUDE.md`'s "Current live wiring" section for the
 full troubleshooting history.
 
+## Where results go
+
+Every measurement script writes **one folder per run**, never into the folder you ran it from:
+
+```
+results/<test>/<label>_<YYYYMMDD-HHMMSS>/
+    report.html      open in any browser: run details, tables, graphs (one self-contained file)
+    summary.txt      everything the script printed
+    *.csv, *.json    the raw data, unrounded -- for Excel, scripts, comparing runs
+    plots/*.png      each graph on its own, for pasting elsewhere
+    run.json         what ran, when, with which command line
+```
+
+**`results/index.html`** lists every run, newest first, with its headline result (e.g. "PASS:
+121/121", "Worst THD+N −78.4 dB at 6016 Hz") and a link to its report. It is rebuilt after each run;
+`python report.py` rebuilds it by hand.
+
+Two options, the same on every script:
+
+| Option | Does |
+|---|---|
+| `--label NAME` | names the run folder: the DUT, the cable, the setting (`--label m51_usb_96k`). Each script has a sensible default (`dac`, the DCX output, `selftest`...). |
+| `--outdir DIR` | puts this run exactly in `DIR` instead |
+
+`-o FILE`, where a script has it, now means "just the CSV, to this file, no results folder"
+(`-o -` prints it), for piping or a one-off. A run that fails part-way still writes its folder
+and report, marked as partial, with everything measured up to that point. `--dry-run` runs are
+labelled `dryrun_…` so they can't be mistaken for measurements. Graphs need `matplotlib`; without
+it you get everything except the graphs, and the report says so.
+
+`results/` is git-ignored: it holds the serial number, option key and calibration. The instrument
+backups (`results/CAL/`, `results/DISK/`, `results/REF/`) are separate folders you name
+yourself with `tools/upl_backup.py --outdir`.
+
+The code is `report.py` (`Run`, used as `with Run("mytest", label=...) as rep:` plus
+`rep.csv / rep.table / rep.plot`); the start of that file explains how to add it to a new script.
+
 ## Core control libraries
 
 These provide the `import`-able classes the test scripts build on. Each is also a standalone CLI.
@@ -85,18 +123,18 @@ Quick examples:
 # UPL: confirm remote control is live, read a value, pull a sweep to CSV
 python upl_capture.py --port COM7 probe
 python upl_capture.py --port COM7 raw "SYST:ERR?"
-python upl_capture.py --port COM7 autoexport -o sweep.csv
+python upl_capture.py --port COM7 autoexport              # -> results/autoexport/trace_<time>/
 python upl_capture.py --port GPIB0::20::INSTR probe      # the same, over GPIB
 
 # UPL: run the instrument's OWN sweep engine
-python upl_capture.py --port COM7 nsweep --start 20 --stop 20000 --points 40 -o fr.csv
+python upl_capture.py --port COM7 --label loopback nsweep --start 20 --stop 20000 --points 40
 
 # UPL: have the instrument save its current trace to its own disk, then pull that file
 python upl_capture.py --port COM7 storetrace "C:\UPL\FR.EXP"
 python upl_capture.py --port COM7 getfile "C:\UPL\FR.EXP" -o FR.EXP
 
 # UPL: full FFT spectrum, paging past the 1024-line limit
-python upl_capture.py --port COM7 fft --size 8192 -o fft.csv
+python upl_capture.py --port COM7 fft --size 8192
 
 # DCX2496: enable remote, nudge a gain, set a crossover point
 python dcx2496.py --port COM2 enable
@@ -149,8 +187,9 @@ sampling — silently, with no error. `DISP:TRAC:IND <0..7>` selects the block; 
 
 ```bash
 python upl_capture.py --dry-run fft --size 8192        # see the paging, offline
-python upl_capture.py --port COM7 fft --size 8192 -o fft.csv
-python upl_capture.py --port COM7 fft --zoom 8 --center 10000 -o zoomed.csv
+python upl_capture.py --port COM7 fft --size 8192
+python upl_capture.py --port COM7 --label zoom10k fft --zoom 8 --center 10000
+python upl_capture.py --port COM7 fft --size 8192 -o -      # just the CSV, on screen
 ```
 
 This is what the "FFT zoom quirk" in the old `m51_jitter_fft.py` turned out to be — zoom was never broken,
@@ -165,7 +204,7 @@ panel. `--preserve` brackets the whole measurement with a snapshot/restore inste
 uses in its own shipped `FLAT_GEN.BAS` macro:
 
 ```bash
-python upl_capture.py --port COM7 --preserve nsweep --points 40 -o fr.csv
+python upl_capture.py --port COM7 --preserve nsweep --points 40
 ```
 
 That sends `MMEM:STOR:STAT 2,'C:\UPL\USER\UPLTMP.SCO'` first (mode 2 = the *complete* setup), does
@@ -179,8 +218,8 @@ R&S's own programs configure a measurement, rather than sending every panel sett
 
 ```bash
 python upl_capture.py --dry-run diagdump                          # offline, see what it would do
-python upl_capture.py --port COM7 diagdump --devices SERN -o results/diag_sern   # first live run
-python upl_capture.py --port COM7 diagdump -o results/diag_full                  # then the full set
+python upl_capture.py --port COM7 --label sern diagdump --devices SERN   # first live run
+python upl_capture.py --port COM7 --label full diagdump                   # then the full set
 ```
 
 A **read-only** dump of what looks like the unit's stored identity and calibration — serial number,
@@ -330,7 +369,9 @@ crosstalk) stays comparable.
 
 88.2/96 kHz need B29's high rate mode (`CONF:DAI HRM`), which Vol.2 says also degrades the analog
 analyzer somewhat, so it's switched on only for those rates and back to `BRM` at the end. Output
-goes to `results/dac/<label>_<timestamp>/` (git-ignored): a CSV per test plus
+goes to `results/dac/<label>_<timestamp>/` (git-ignored): `report.html` with a graph for each
+test (frequency response L/R selective and broadband, L−R per pass, THD+N and THD vs level and
+frequency, spectra, crosstalk, jitter sidebands, linearity...), a CSV per test, and
 `summary.txt`. **Not yet run against hardware** — every config command is error-checked, and a
 list of anything the UPL rejected is printed at the end, so the first live `check` shows what
 needs fixing. The refactor was checked offline: `--source upl` sends the same SCPI as the old
@@ -369,10 +410,10 @@ sidecar), or with `--external` just listens while a player plays the file itself
 ```bash
 # PC plays into a DAC (M51, Elektor, NW-A306 in USB-DAC mode...)
 python measurements/upacd_test.py --upl-port COM7 --device 16 --exclusive --label m51_96k \
-    --wav testsignals/96k_24/11_level_staircase.wav linearity -o results/m51_lin_96k.csv
+    --wav testsignals/96k_24/11_level_staircase.wav linearity
 # the DUT plays the copied file itself (NW-A306 file playback): press play when told
 python measurements/upacd_test.py --upl-port COM7 --external --label a306_96k \
-    --wav testsignals/96k_24/10_third_octaves_-6dBFS.wav segments -o results/a306_fr_96k.csv
+    --wav testsignals/96k_24/10_third_octaves_-6dBFS.wav segments
 ```
 
 Linearity is referenced to the staircase's first step, not the marker, so the DUT's 1 kHz-vs-2 kHz
@@ -393,11 +434,11 @@ python measurements/upacd_test.py devices                       # find the outpu
 
 # NAD M51 over USB
 python measurements/upacd_test.py --upl-port COM7 --device 16 --exclusive \
-    --label m51_44k linearity -o results/m51_linearity.csv
+    --label m51_44k linearity
 
 # the laptop's own headphone/line output (needs a 3.5mm -> XLR adapter into the UPL)
 python measurements/upacd_test.py --upl-port COM7 --device 5 --exclusive \
-    --label laptop_builtin linearity -o results/laptop_linearity.csv
+    --label laptop_builtin linearity
 
 # any stepped-tone track, generic
 python measurements/upacd_test.py --upl-port COM7 --device 16 --exclusive segments \
@@ -438,7 +479,7 @@ Internal loopback only (`INP:TYPE GEN2`), so nothing needs to be patched. Two pa
   A‑weighting, and through a 1–5 kHz user bandpass.
 
 ```bash
-python measurements/filter_test.py --port COM2 -o results/filter_test   # -> _thdn.csv, _fft.csv
+python measurements/filter_test.py --port COM2      # -> results/filter_test/loopback_<time>/
 ```
 
 Sends `*RST` first; leaves filters off and the generator at 0 V. Keep user lowpass cutoffs at or
@@ -458,7 +499,7 @@ python audio_tests.py selftest         # validate the analyzer math on a synthet
 python audio_tests.py analyze some.wav
 python audio_tests.py noise            # record input noise floor (no sound played)
 python audio_tests.py loopback --freq 1000 --level -6   # PLAYS a tone and records it
-python audio_tests.py response -o sweep.csv             # PLAYS a stepped-sine sweep
+python audio_tests.py response --label laptop          # PLAYS a stepped-sine sweep
 ```
 
 ## Equipment-specific tests
@@ -503,20 +544,20 @@ Physical setup for all of the DCX2496 tests below: **UPL generator output → DC
 generator and the analyzer, with the DCX2496 as the device under test in between.
 
 **`dcx_sweep.py`** — the general-purpose permanent tool. Sets a DCX2496 crossover (and/or gain),
-runs a UPL level-vs-frequency sweep, saves CSV. Handles one curve or a family of curves (e.g.
+runs a UPL level-vs-frequency sweep, saves CSV and a graph. Handles one curve or a family of curves (e.g.
 several highpass cutoffs) in one run.
 
 ```bash
 # one highpass curve, cutoff isolated (lowpass disabled)
 python dcx_sweep.py --dcx-port COM2 --upl-port COM7 --out-ch out1 \
-    --hp-freq 500 --hp-type lr24 --lp-type off -o sweep_500hz.csv
+    --hp-freq 500 --hp-type lr24 --lp-type off --label hp500_lr24
 
-# a family of cutoffs in one run (one CSV column per cutoff)
+# a family of cutoffs in one run (one CSV column and one curve per cutoff)
 python dcx_sweep.py --dcx-port COM2 --upl-port COM7 --out-ch out1 \
-    --hp-freq 100,300,1000,3000 --hp-type lr24 --lp-type off -o family.csv
+    --hp-freq 100,300,1000,3000 --hp-type lr24 --lp-type off --label hp_family
 
 # just re-measure whatever the DCX is currently configured to, no writes at all
-python dcx_sweep.py --dcx-port COM2 --upl-port COM7 --out-ch out1 --no-configure -o asis.csv
+python dcx_sweep.py --dcx-port COM2 --upl-port COM7 --out-ch out1 --no-configure --label asis
 ```
 
 **Before trusting a result**, `dcx_sweep.py` prints a warning if the UPL looks like it's in an
@@ -530,22 +571,27 @@ hit during development — see `CLAUDE.md`, "FIRST REAL AUTOMATED CROSSOVER MEAS
 
 ```bash
 # THD+N vs frequency and vs level, flat passthrough
-python measurements/dcx_thdn.py --dcx-port COM2 --upl-port COM7 -o results/dcx_thdn.csv
+python measurements/dcx_thdn.py --dcx-port COM2 --upl-port COM7
 
 # separates THD+N into pure THD (harmonics) vs noise contribution, vs frequency --
 # use this instead of dcx_thdn.py if you want to know whether a bad number is really
 # distortion or just the DCX's noise floor (see CLAUDE.md for what this revealed)
-python measurements/dcx_thd_vs_thdn.py --dcx-port COM2 --upl-port COM7 -o results/dcx_thd_vs_thdn.csv
+python measurements/dcx_thd_vs_thdn.py --dcx-port COM2 --upl-port COM7
 
 # gain accuracy (+/-15dB), filter-type comparison (Butterworth/Bessel/Linkwitz-Riley
 # at several orders), and limiter behavior, all in one run
-python measurements/dcx_gauntlet.py --dcx-port COM2 --upl-port COM7 -o results/dcx_gauntlet.json
+python measurements/dcx_gauntlet.py --dcx-port COM2 --upl-port COM7
 
 # balanced (XLR direct) vs single-ended (via XLR-to-RCA-to-XLR adapters) comparison --
-# run once per physical wiring state with a different mode label
+# run once per physical wiring state with a different mode label; --compare puts the
+# earlier run beside this one in the report
 python measurements/dcx_balanced_test.py balanced     --dcx-port COM2 --upl-port COM7
-python measurements/dcx_balanced_test.py single_ended --dcx-port COM2 --upl-port COM7
+python measurements/dcx_balanced_test.py single_ended --dcx-port COM2 --upl-port COM7 \
+    --compare results/dcx_balanced_test/balanced_<timestamp>
 ```
+
+Each DCX script's run folder is named after the output channel (`out1_<timestamp>`) unless you
+give `--label`.
 
 `dcx_balanced_test.py` warns inline if a run's level is near the noise floor with THD+N near
 0dB — that pattern means the signal isn't actually reaching the analyzer (check the physical
@@ -569,11 +615,11 @@ for when that isn't available or you want a single member on stdout.)
 
 | Folder | Contents |
 |---|---|
-| top level | core control libraries (`upl_capture.py`, `dcx2496.py`, `nad_m51.py`, `ser_in.py`), `dcx_sweep.py`, `upl_selftest.py`, `audio_tests.py` |
-| `measurements/` | characterization scripts: each drives the UPL (and usually a DUT) through one test and writes CSV/JSON |
+| top level | core control libraries (`upl_capture.py`, `dcx2496.py`, `nad_m51.py`, `ser_in.py`), `report.py` (results folders + reports), `dcx_sweep.py`, `upl_selftest.py`, `audio_tests.py` |
+| `measurements/` | characterization scripts: each drives the UPL (and usually a DUT) through one test and writes a results folder |
 | `tools/` | utilities: disk/file backup, SNDFILE batch transfer, LZH extraction, test-signal generator |
 | `testsignals/` | generated test WAVs, **git-ignored** — rebuild with `tools/testsignals.py` |
-| `results/` | measurement output and instrument backups, **git-ignored** (it holds the serial number, option key and calibration) |
+| `results/` | one folder per run (`results/<test>/<label>_<timestamp>/`, see [Where results go](#where-results-go)), `index.html`, and the instrument backups `CAL/`, `DISK/`, `REF/`. **git-ignored** (it holds the serial number, option key and calibration) |
 
 ## Where things are documented
 

@@ -2,7 +2,7 @@
 
 Working notes for the Rohde & Schwarz UPL audio analyzer. Captures what we found in the
 v3.06 firmware install media and the plan/tools for (a) keeping the instrument alive long‑term
-and (b) getting measurement data off it easily. Last updated 2026‑09‑23.
+and (b) getting measurement data off it easily. Last updated 2026‑09‑24.
 
 **For "how do I actually run the tools/tests," see `README.md` (general) and
 `SELFTEST_README.md` (standalone, for `upl_selftest.py`) — both added 2026‑09‑23. This file
@@ -20,6 +20,37 @@ characterization scripts) and **`tools/`** (`upl_backup.py`, `sndfile_batch.py`,
 catalogued in this pass: a substantial **NAD M51 DAC** control module + test suite
 (`nad_m51.py` + `measurements/m51_*.py`) that was built earlier in the project but not previously
 described in this log in detail — see `README.md` for what each one does and how to run it.
+
+## Results folders and reports (2026‑09‑24)
+
+Every measurement script now writes **one folder per run**, `results/<test>/<label>_<YYYYMMDD-HHMMSS>/`,
+holding `report.html` (run details, tables, matplotlib graphs embedded as PNG, one self-contained
+file), the raw CSV/JSON unchanged, `plots/*.png`, `summary.txt` (the console output, tee'd) and
+`run.json`. `results/index.html` lists every run with a one-line headline. All of it is
+`report.py` (`Run` context manager + `add_output_args`); `--label`/`--outdir` are the same on every
+script, `-o FILE` (where it exists) now means "just the CSV, no folder" (`-o -` = stdout), and
+`--dry-run` runs get a `dryrun_` label. Anchored to the project folder, so the working directory no
+longer matters; previously most scripts dropped fixed-name files into the current folder and
+overwrote them on the next run. Scripts converted: `dac_test.py` (per-test graphs), the four
+`dcx_*` measurement scripts, `dcx_sweep.py`, `filter_test.py`, `upacd_test.py`, `upl_selftest.py`,
+`upl_capture.py` (`sweep nsweep fft autoexport diagdump`), `audio_tests.py response`.
+`dcx_balanced_test.py` gained `--compare <earlier run>` for the two-wiring comparison it was
+built for. A run that raises still writes its folder, marked partial. Verified offline only:
+dry runs of everything that has `--dry-run`, and fake-data runs of the rest; `seqcheck` still passes.
+
+**Old loose results were re-filed the same way** (moved byte-identical, MD5-checked; folder stamp =
+the file's own mtime) and given reports: the 2026‑09‑22 M51 runs under `results/m51_fr/`,
+`m51_gain_sweep/`, `m51_clip_onset/`, `m51_freq_stability/`, `m51_jitter_fft/`; the 2026‑09‑24
+filter test under `results/filter_test/loopback_20260924-004233/`; the diagdump under
+`results/diagdump/full_20260923-225942/`. The instrument backups `results/CAL`, `DISK`, `REF`
+were left where they are.
+
+**Bug found in `upl_selftest.py` while doing this:** `rec()` never checked limit-type readings
+(set value `None`: inherent THD+N, DFD, noise) against their limit. Only an n/a reading could
+fail, so the "N/M within tolerance" summary could count an over-limit reading as a pass. The
+per-section console line did its own PASS/FAIL comparison, so the 2026‑09‑22 run's printed
+results were right, and those readings were all well inside their limits anyway. Fixed:
+`ok = meas <= limit`.
 
 ## Goal / context
 
@@ -285,13 +316,13 @@ selector and a mid-table timeout.
 
 **First live run — go in this order:**
 ```
-python upl_capture.py --port COM7 diagdump --devices SERN -o results/diag_sern
+python upl_capture.py --port COM7 --label sern diagdump --devices SERN
 ```
 The serial is known (**100330/6**), so this one run checks that the walk works, what `SYST:ERR?`
 says at the end of a table, and what the raw values look like — all against a known answer.
 Only then run the default list:
 ```
-python upl_capture.py --port COM7 diagdump -o results/diag_full
+python upl_capture.py --port COM7 --label full diagdump
 ```
 
 ### Longevity action plan (priority order)
@@ -1092,7 +1123,8 @@ Internal loopback (`*RST; INP:TYPE GEN2`), UPL on PC COM2 at 115200.
   (`-222`). The library is installed where `README.B23` says.
 - **`*OPT?` literal reply:** `B1(0.01),B29(2.16),B21,B22,B4,B5(1.62),B6,0,B10,0,B23,0` — the form
   with empty slots is the real one; the other transcription in this file is wrong.
-- **`diagdump` run.** Results in `results/diag_full_2026-09-23.{csv,json}` — **git-ignored** (serial +
+- **`diagdump` run.** Results in `results/diagdump/full_20260923-225942/diag.{csv,json}` (moved
+  there 2026‑09‑24 from `results/diag_full_2026-09-23.*`) — **git-ignored** (serial +
   option key; the repo has a public GitHub remote). Keep a copy with the disk image.
   - `SERN`: **4 words, `100330`, `6`, `412`, `0`**, ends with `-222` at addr 4. Words 0–1 match the
     known serial 100330/6 — the walk works. Words 2–3 are new; meaning unknown (date code? model?).
@@ -1334,11 +1366,13 @@ ephemeral scratchpad and were superseded/discarded).
 
 ### Running it
 ```
-python upl_selftest.py --port COM7                     # default baud 115200, auto-named report file
-python upl_selftest.py --port COM7 --baud 19200 -o results/run1.txt   # slower, if 115200 misbehaves
+python upl_selftest.py --port COM7                     # default baud 115200
+python upl_selftest.py --port COM7 --baud 19200 --label slow   # slower, if 115200 misbehaves
 ```
-- Prints every section live to the console AND writes the identical full report to a text file
-  (default `upl_selftest_<timestamp>.txt` in the current folder, or pass `-o <path>`).
+- Prints every section live to the console AND writes a results folder,
+  `results/selftest/<label>_<timestamp>/`: `report.html`, `report.txt` (the text report),
+  `readings.csv`. (Before 2026‑09‑24 it wrote `upl_selftest_<timestamp>.txt` in the current
+  folder; see "Results folders and reports" below.)
 - Exit code 0 = all readings within tolerance, 1 = at least one out-of-tolerance reading (see the
   `OUT OF TOL` lines in the summary at the end for which).
 - Runs `*RST` at the start (same as the real selftest) — clears whatever setup is currently on the

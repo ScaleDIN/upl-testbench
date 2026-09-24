@@ -25,8 +25,12 @@ IMPORTANT: this runs "*RST" at the start, which clears whatever setup is current
 
 Usage:
   python upl_selftest.py --port COM2
-  python upl_selftest.py --port COM2 --baud 19200 -o results/selftest_2026-09-22.txt
+  python upl_selftest.py --port COM2 --baud 19200 --label after_recal
   python upl_selftest.py --port GPIB0::20::INSTR          # over GPIB (--baud ignored)
+
+Output: results/selftest/<label>_<timestamp>/ -- report.html (pass/fail tables per section),
+report.txt (the classic text report), readings.csv, summary.txt. -o FILE also copies the
+text report to FILE.
 
 Remote-control baud: 115200 is confirmed working (set it on the UPL's OPTIONS panel, COM2 baud --
 it's listed there even though the Vol.2 manual's SCPI baud-set table only printed up to 56000;
@@ -37,10 +41,10 @@ make sure the UPL's OPTIONS panel COM2 baud matches, or pass --baud to override.
 import argparse
 import sys
 import time
-import datetime
 
 try:
     from upl_capture import connect
+    from report import Run, add_output_args
 except ImportError:
     sys.exit("upl_capture.py must be in the same folder (it provides the UPL serial class).")
 
@@ -93,7 +97,9 @@ class Selftest:
         ok = True
         if is_na(meas):
             ok = False
-        elif setv not in (None, 0):
+        elif setv is None:                  # a limit, not a target: THD+N <= -93 dB, noise <= 2 uV
+            ok = meas <= tol
+        elif setv != 0:
             dev = 100 * (meas - setv) / setv if unit != "dB" else (meas - setv)
             ok = abs(dev) <= tol
         self.results.append(dict(section=section, chan=chan, set=setv, meas=meas,
@@ -353,19 +359,65 @@ def main():
     p.add_argument("--baud", type=int, default=115200, help="remote-control baud (115200 confirmed working; match the UPL's OPTIONS-panel COM2 setting)")
     p.add_argument("--timeout", type=float, default=12.0, help="reply timeout seconds")
     p.add_argument("--settle", type=float, default=0.4, help="extra settle time after a frequency change")
-    p.add_argument("-o", "--output", help="also write the full report to this text file "
-                                            "(default: upl_selftest_<timestamp>.txt)")
+    p.add_argument("-o", "--output", help="also copy the text report to this file")
+    add_output_args(p, default_label="selftest")
     args = p.parse_args()
 
     t = Selftest(args.port, args.baud, args.timeout, args.settle)
-    overall, fails = t.run()
-    t.u.close()
-
-    out = args.output or ("upl_selftest_%s.txt" % datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
-    with open(out, "w") as f:
-        f.write("\n".join(t.log_lines) + "\n")
-    print("\nFull report written to: %s" % out)
+    overall = "INCOMPLETE"
+    with Run("selftest", label=args.label, outdir=args.outdir,
+             title="UPL selftest (R&S factory sequence)") as rep:
+        try:
+            overall, fails = t.run()
+        finally:
+            t.u.close()
+            report(rep, t, overall)
+    for out in filter(None, [args.output]):
+        with open(out, "w") as f:
+            f.write("\n".join(t.log_lines) + "\n")
+        print("Text report also written to: %s" % out)
     return 0 if overall == "PASS" else 1
+
+
+def report(rep, t, overall):
+    """report.txt (the classic text report), readings.csv, and tables per section."""
+    with open(rep.path("report.txt"), "w") as f:
+        f.write("\n".join(t.log_lines) + "\n")
+    rep.add_file("report.txt", "the text report, as the selftest has always written it")
+    rows = [(r["section"], r["chan"], r["set"], r["meas"], r["dev"], r["tol"], r["unit"], r["ok"])
+            for r in t.results]
+    rep.csv("readings.csv", ["section", "channel", "set", "measured", "deviation", "tolerance",
+                             "unit", "ok"], rows)
+    fails = [r for r in t.results if not r["ok"]]
+    rep.headline = f"{overall}: {len(t.results) - len(fails)}/{len(t.results)} readings within tolerance"
+    if fails:
+        rep.heading("Out of tolerance")
+        rep.table(["Section", "Channel", "Set", "Measured", "Deviation", "Tolerance"],
+                  [(r["section"], r["chan"], r["set"], r["meas"], _dev(r), _tol(r)) for r in fails],
+                  status=["fail"] * len(fails))
+    sections = {}
+    for r in t.results:
+        sections.setdefault(r["section"], []).append(r)
+    for name, rs in sections.items():
+        rep.heading(name)
+        rep.table(["Channel", "Set", "Measured", "Deviation", "Tolerance"],
+                  [(r["chan"], r["set"], r["meas"], _dev(r), _tol(r)) for r in rs],
+                  status=["ok" if r["ok"] else "fail" for r in rs])
+
+
+def _dev(r):
+    if r["dev"] is None:
+        return ""
+    return "%+.3f %s" % (r["dev"], "dB" if r["unit"] == "dB" else "%")
+
+
+def _tol(r):
+    if r["tol"] is None:
+        return ""
+    unit = {"dB": "dB", "uV": "µV"}.get(r["unit"], "%")
+    if r["set"] is None:
+        return "≤ %g %s" % (r["tol"], unit)
+    return "±%g %s" % (r["tol"], unit)
 
 
 if __name__ == "__main__":

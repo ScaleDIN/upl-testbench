@@ -10,7 +10,9 @@ The DUT is whatever is between the sound device and the UPL's analyzer input:
     laptop --> M51 --> DCX2496 ---------> UPL          (chain them)
 
 Pick the output with --device (find indices via `python audio_tests.py devices`).
---label just tags the CSV so runs are comparable later.
+--label names the run: results go to results/upacd_<test>/<label>_<timestamp>/
+(report.html with table + graph, the CSV, summary.txt). -o FILE writes just
+the CSV there instead (-o - prints it).
 
 WHY THE DISC AND NOT THE UPL'S OWN GENERATOR
     These are standard, known signals that exercise the *whole* digital chain at
@@ -55,9 +57,9 @@ Examples:
     python measurements/upacd_test.py --dry-run linearity
     python measurements/upacd_test.py devices
     python measurements/upacd_test.py --upl-port COM7 --device 16 --exclusive \
-        --label m51_44k linearity -o results/m51_linearity.csv
+        --label m51_44k linearity
     python measurements/upacd_test.py --upl-port COM7 --device 5 --exclusive \
-        --label laptop_builtin linearity -o results/laptop_linearity.csv
+        --label laptop_builtin linearity
     python measurements/upacd_test.py --upl-port COM7 --device 16 --exclusive \
         segments --track 6 --tones 20,40,100,200,500,1000,5000,7000,10000,16000,18000,20000
     python measurements/upacd_test.py --upl-port COM7 --device 16 --exclusive --label m51_96k \
@@ -69,6 +71,7 @@ Examples:
 import argparse
 import io
 import json
+import math
 import os
 import statistics
 import sys
@@ -79,6 +82,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
 from upl_capture import connect, DryRunUPL  # noqa: E402
+from report import Run, add_output_args  # noqa: E402
 
 
 # --- disc knowledge, from the scanned booklet (see CLAUDE.md) ----------------
@@ -353,19 +357,28 @@ def cmd_linearity(upl, args):
         meas = db(st["level_v"], ref_v) + offset
         rows.append((nominal, meas, meas - nominal, st["level_v"], st["n"], st["level_sd"]))
 
-    out = open(args.output, "w") if args.output else sys.stdout
-    try:
-        ref_v0 = ref_v / 10 ** (offset / 20.0)
-        out.write(f"# {source} D/A linearity  dut={args.label}  "
-                  f"ref_0dBFS={ref_v0:.6g} V  exclusive={args.exclusive}  "
-                  f"external={args.external}\n")
-        out.write("nominal_dBFS,measured_dBFS,error_dB,level_V,samples,level_sd_V\n")
-        for n, m, e, v, cnt, sd_ in rows:
-            out.write(f"{n},{m:.3f},{e:+.3f},{v:.6g},{cnt},{sd_:.3g}\n")
-    finally:
-        if args.output:
-            out.close()
-            print(f"wrote {len(rows)} steps -> {args.output}", file=sys.stderr)
+    ref_v0 = ref_v / 10 ** (offset / 20.0)
+    comment = (f"{source} D/A linearity  dut={args.label}  ref_0dBFS={ref_v0:.6g} V  "
+               f"exclusive={args.exclusive}  external={args.external}")
+    header = ["nominal_dBFS", "measured_dBFS", "error_dB", "level_V", "samples", "level_sd_V"]
+    lines = [(n, f"{m:.3f}", f"{e:+.3f}", f"{v:.6g}", cnt, f"{sd_:.3g}") for n, m, e, v, cnt, sd_ in rows]
+    rep = getattr(args, "rep", None)
+    if rep:
+        rep.info("Source", source)
+        rep.info("0 dBFS reference", f"{ref_v0:.6g} V")
+        rep.csv("linearity.csv", header, lines, comments=[comment])
+        worst = max((abs(r[2]) for r in rows), default=0.0)
+        rep.headline = f"Worst linearity error {worst:.2f} dB"
+        rep.heading("D/A linearity")
+        rep.plot("linearity", [("error", [r[0] for r in rows], [r[2] for r in rows])],
+                 xlabel="Nominal level (dBFS)", ylabel="Measured − nominal (dB)",
+                 hlines=[(args.tolerance_db, f"+{args.tolerance_db:g} dB"),
+                         (-args.tolerance_db, f"−{args.tolerance_db:g} dB")])
+        rep.table(["Nominal (dBFS)", "Measured (dBFS)", "Error (dB)", "Level (V)", "Readings", "SD (V)"],
+                  rows, formats=[".1f", ".2f", "+.2f", ".6g", None, ".3g"],
+                  status=["fail" if abs(r[2]) > args.tolerance_db else "ok" for r in rows])
+    else:
+        write_plain(args.output, comment, header, lines)
 
     print("\n nominal   measured    error", file=sys.stderr)
     for n, m, e, _v, _c, _s in rows:
@@ -374,6 +387,19 @@ def cmd_linearity(upl, args):
     worst = max((abs(r[2]) for r in rows), default=0.0)
     print(f"\nworst linearity error: {worst:.2f} dB", file=sys.stderr)
     return 0
+
+
+def write_plain(path, comment, header, lines):
+    """-o: just the CSV, to a file or (-) the screen -- no results folder."""
+    out = sys.stdout if path == "-" else open(path, "w")
+    try:
+        out.write(f"# {comment}\n" + ",".join(header) + "\n")
+        for ln in lines:
+            out.write(",".join(str(x) for x in ln) + "\n")
+    finally:
+        if out is not sys.stdout:
+            out.close()
+            print(f"wrote {len(lines)} rows -> {path}", file=sys.stderr)
 
 
 def cmd_segments(upl, args):
@@ -401,18 +427,27 @@ def cmd_segments(upl, args):
         samples = capture(upl, args, name, wav)
 
     runs = segment(samples, tones, tol=args.tol, min_samples=args.min_samples)
-    out = open(args.output, "w") if args.output else sys.stdout
-    try:
-        src = name or f"UPA-CD track {args.track}"
-        out.write(f"# {src}  dut={args.label}  external={args.external}\n")
-        out.write("tone_Hz,t_start_s,t_end_s,level_V,samples,level_sd_V\n")
-        for r in runs:
-            out.write(f"{r['tone']},{r['t_start']:.2f},{r['t_end']:.2f},"
-                      f"{r['level_v']:.6g},{r['n']},{r['level_sd']:.3g}\n")
-    finally:
-        if args.output:
-            out.close()
-            print(f"wrote {len(runs)} segments -> {args.output}", file=sys.stderr)
+    src = name or f"UPA-CD track {args.track}"
+    comment = f"{src}  dut={args.label}  external={args.external}"
+    header = ["tone_Hz", "t_start_s", "t_end_s", "level_V", "samples", "level_sd_V"]
+    lines = [(r["tone"], f"{r['t_start']:.2f}", f"{r['t_end']:.2f}", f"{r['level_v']:.6g}",
+              r["n"], f"{r['level_sd']:.3g}") for r in runs]
+    rep = getattr(args, "rep", None)
+    if rep:
+        rep.info("Source", src)
+        rep.csv("segments.csv", header, lines, comments=[comment])
+        rep.heading("Level per tone")
+        lv = [r["level_v"] for r in runs]
+        ref = max((v for v in lv if v > 0), default=None)
+        if ref and len(runs) > 1:
+            rep.plot("segments", [("level", [r["tone"] for r in runs],
+                                   [20 * math.log10(v / ref) if v > 0 else float("nan") for v in lv])],
+                     xlabel="Tone (Hz)", ylabel="dB re loudest tone", logx=True)
+        rep.table(["Tone (Hz)", "Start (s)", "End (s)", "Level (V)", "Readings", "SD (V)"],
+                  [(r["tone"], r["t_start"], r["t_end"], r["level_v"], r["n"], r["level_sd"]) for r in runs],
+                  formats=["g", ".2f", ".2f", ".6g", None, ".3g"])
+    else:
+        write_plain(args.output, comment, header, lines)
     for r in runs:
         print(f"  {r['tone']:9.1f} Hz  {r['level_v']:.6g} V  ({r['n']} readings)",
               file=sys.stderr)
@@ -454,7 +489,7 @@ def main():
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--upl-port", default="COM7", help="UPL port: COMn (RS-232) or GPIB0::20::INSTR (GPIB, e.g. 82357B)")
     p.add_argument("--device", type=int, help="sounddevice OUTPUT index (see `devices`)")
-    p.add_argument("--label", default="dut", help="tag for the CSV, e.g. m51_44k / laptop_builtin")
+    add_output_args(p, default_label="dut")
     p.add_argument("--zip", default=DEFAULT_ZIP, help="UPA-CD zip (tracks are read straight out of it)")
     p.add_argument("--wav", help="play a tools/testsignals.py file (its .json sidecar is read)")
     p.add_argument("--external", action="store_true",
@@ -478,12 +513,12 @@ def main():
     lin = sub.add_parser("linearity", help="D/A linearity: track 4, or a --wav staircase")
     lin.add_argument("--edge", type=float, default=0.5,
                      help="seconds trimmed from each end of a step (settling, USB latency)")
-    lin.add_argument("-o", "--output")
+    lin.add_argument("-o", "--output", help="write only the CSV to this file (- = print it) instead of a results folder")
 
     seg = sub.add_parser("segments", help="any stepped-tone track or --wav file: one level per tone")
     seg.add_argument("--track", type=int)
     seg.add_argument("--tones", help="comma-separated expected tones in Hz (default: sidecar's)")
-    seg.add_argument("-o", "--output")
+    seg.add_argument("-o", "--output", help="write only the CSV to this file (- = print it) instead of a results folder")
 
     args = p.parse_args()
 
@@ -501,8 +536,18 @@ def main():
         raise SystemExit("--device is required (run the `devices` subcommand to find it)")
 
     upl = DryRunUPL(echo=False) if args.dry_run else connect(args.upl_port, timeout=args.timeout)
+    fn = {"linearity": cmd_linearity, "segments": cmd_segments}[args.cmd]
     try:
-        return {"linearity": cmd_linearity, "segments": cmd_segments}[args.cmd](upl, args)
+        if args.output:
+            args.rep = None
+            return fn(upl, args)
+        label = ("dryrun_" if args.dry_run else "") + args.label
+        with Run(f"upacd_{args.cmd}", label=label, outdir=args.outdir,
+                 title=f"UPA-CD / test file: {args.cmd}") as args.rep:
+            args.rep.info("DUT", args.label)
+            args.rep.info("Playback", "external player" if args.external else
+                          f"device {args.device}, {'exclusive' if args.exclusive else 'shared'} mode")
+            return fn(upl, args)
     finally:
         upl.close()
 

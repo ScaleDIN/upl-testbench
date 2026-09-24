@@ -13,8 +13,9 @@ A-weighting filter, and with a user 1-5 kHz bandpass. The FFT honours up to 3
 analyzer filters (Vol.1, FFT column of the filter table).
 
 Usage:
-  python measurements/filter_test.py --port COM2 -o results/filter_test
-Writes <o>_thdn.csv and <o>_fft.csv (freq, one column per filter case).
+  python measurements/filter_test.py --port COM2 [--label NAME]
+Output: results/filter_test/<label>_<timestamp>/ -- report.html (table + graphs),
+thdn.csv, fft.csv (freq, one column per filter case), summary.txt.
 Sends *RST first; leaves filters off, generator back on sine, 0 V.
 """
 import argparse
@@ -23,6 +24,8 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from upl_capture import connect, read_fft  # noqa: E402
+from report import Run, add_output_args, is_na  # noqa: E402
+import math  # noqa: E402
 
 
 def cmd(u, c):
@@ -48,9 +51,21 @@ def main():
     p.add_argument("--port", required=True)
     p.add_argument("--baud", type=int, default=115200)
     p.add_argument("--averages", type=int, default=16)
-    p.add_argument("-o", "--output", default="filter_test")
+    add_output_args(p, default_label="loopback")
     args = p.parse_args()
     u = connect(args.port, args.baud, 60.0)
+    rows, spectra, freqs = [], {}, None
+    with Run("filter_test", label=args.label, outdir=args.outdir,
+             title="Analyzer filters: THD+N and FFT") as rep:
+        rep.info("Signal", "internal loopback (INP:TYPE GEN2)")
+        try:
+            freqs = _measure(u, args, rows, spectra)
+        finally:
+            u.close()
+            report(rep, rows, freqs, spectra)
+
+
+def _measure(u, args, rows, spectra):
     u.write("*CLS")
 
     # ---------------- Part A: THD+N with and without a routed user filter
@@ -59,7 +74,6 @@ def main():
     for c in ("*RST;*WAI", "INP:TYPE GEN2", "SOUR:LOWD ON", "SOUR:FREQ 1000 HZ",
               "SOUR:VOLT 1 V", "SENS1:FUNC 'THDN'", "SENS:UNIT DB", "SENS:FILT OFF"):
         cmd(u, c)
-    rows = []
 
     def case(label):
         v = measure(u)
@@ -82,9 +96,6 @@ def main():
         case(f"{fc // 1000} kHz LP routed (FILT1:UFIL1)")
     cmd(u, "SENS:FILT OFF")
     case("filters off again")
-    with open(args.output + "_thdn.csv", "w") as f:
-        f.write("case,thdn_dB\n")
-        f.writelines(f"{a},{b}\n" for a, b in rows)
 
     # ---------------- Part B: FFT of white noise through filters
     print("\nPart B: 8k FFT of white noise, unfiltered / A-weighting / 1-5 kHz bandpass")
@@ -100,7 +111,7 @@ def main():
                              "SENS:UFIL2:PASS:LOW 1000 HZ", "SENS:UFIL2:PASS:UPP 5000 HZ",
                              "SENS:FILT1:UFIL2 ON"],
     }
-    spectra, freqs = {}, None
+    freqs = None
     for name, setup in cases.items():
         for c in setup:
             cmd(u, c)
@@ -112,18 +123,32 @@ def main():
         print(f"  {name:18s} {len(f)} lines, {f[0]:.0f}-{f[-1]:.0f} Hz")
         freqs = freqs or f
         spectra[name] = v
-    with open(args.output + "_fft.csv", "w") as fh:
-        fh.write("freq_Hz," + ",".join(spectra) + "\n")
-        for i, fr in enumerate(freqs):
-            fh.write(f"{fr}," + ",".join(str(s[i]) if i < len(s) else "" for s in spectra.values())
-                     + "\n")
 
     # ---------------- leave it tidy
     for c in ("SENS:FILT OFF", "SOUR:FUNC SIN", "SOUR:VOLT 0 V"):
         cmd(u, c)
-    u.close()
-    print(f"\nwrote {args.output}_thdn.csv and {args.output}_fft.csv")
+    return freqs
+
+
+def report(rep, rows, freqs, spectra):
+    rep.csv("thdn.csv", ["case", "thdn_dB"], rows)
+    if rows:
+        rep.heading("A. THD+N (1 kHz, 1 V, B1) with a user low-pass filter")
+        rep.note("A user filter only counts once it is routed into a filter slot "
+                 "(SENS:FILT1:UFIL1 ON); defining it alone changes nothing.")
+        rep.table(["Case", "THD+N (dB)"], rows, formats=[None, ".2f"])
+    if freqs and spectra:
+        rep.csv("fft.csv", ["freq_Hz"] + list(spectra),
+                [[fr] + [s[i] if i < len(s) else "" for s in spectra.values()]
+                 for i, fr in enumerate(freqs)])
+        rep.heading("B. White-noise spectrum through each filter")
+        rep.plot("fft_filters",
+                 [(name, freqs, [20 * math.log10(float(v)) if not is_na(v) and float(v) > 0
+                                 else float("nan") for v in s]) for name, s in spectra.items()],
+                 xlabel="Frequency (Hz)", ylabel="Level (dBV)", logx=True, markers=False)
 
 
 if __name__ == "__main__":
     sys.exit(main())
+
+

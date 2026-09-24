@@ -19,11 +19,16 @@ UPL side setup (front panel, once):
 Examples:
   python upl_capture.py --port COM4 probe
   python upl_capture.py --port COM4 read
-  python upl_capture.py --port COM4 sweep -o sweep.csv
-  python upl_capture.py --port COM4 nsweep --start 20 --stop 20000 --points 40 -o fr.csv
+  python upl_capture.py --port COM4 sweep
+  python upl_capture.py --port COM4 --label dcx_out1 nsweep --start 20 --stop 20000 --points 40
   python upl_capture.py --port COM4 storetrace "C:\\UPL\\FR.EXP" --xaxis
   python upl_capture.py --port COM4 getfile "C:\\UPL\\MYTRACE.EXP" -o MYTRACE.exp
   python upl_capture.py --port COM4 raw "SENS:DATA?"
+
+Output: sweep, nsweep, fft, autoexport and diagdump write a results folder,
+results/<command>/<label>_<timestamp>/ -- report.html (graph + table), the CSV,
+summary.txt. --label names it, --outdir puts it somewhere else, and -o FILE
+writes just the CSV to FILE instead (-o - prints it, as these commands used to).
 
 Offline: every subcommand accepts --dry-run, which swaps the serial link for a
 stub that prints the exact SCPI it would send and answers queries with canned
@@ -32,8 +37,11 @@ sequences still match the documented ones.
 """
 
 import argparse
+import math
 import sys
 import time
+
+from report import Run, add_output_args, is_na
 
 try:
     import serial  # pyserial
@@ -364,6 +372,35 @@ def parse_values(reply, what):
         )
 
 
+def _plain_out(args):
+    """-o FILE, or the screen for -o - (and when a caller gives no Run at all)."""
+    return open(args.output, "w") if args.output not in (None, "-") else sys.stdout
+
+
+def _close_plain(out, args, msg):
+    if out is not sys.stdout:
+        out.close()
+        print(msg)
+
+
+def _trace_report(rep, name, header, rows, xcol, ycols, ylabel, comments=(), logx=True):
+    """CSV + graph (+ table when short) for a trace-shaped result."""
+    rep.csv(f"{name}.csv", header, rows, comments=comments)
+    series = []
+    for col, lab in ycols:
+        ys = []
+        for r in rows:
+            try:
+                ys.append(float(r[col]))
+            except (TypeError, ValueError):
+                ys.append(float("nan"))
+        series.append((lab, [r[xcol] for r in rows], ys))
+    rep.plot(name, series, xlabel="Frequency (Hz)", ylabel=ylabel, logx=logx,
+             markers=len(rows) <= 60)
+    if len(rows) <= 200:
+        rep.table(header, rows)
+
+
 def cmd_probe(upl, args):
     idn = upl.query("*IDN?")
     print("*IDN? ->", idn)
@@ -403,15 +440,19 @@ def cmd_sweep(upl, args):
     freqs = parse_values(upl.query("SOUR:LIST:FREQ?"), "SOUR:LIST:FREQ?")
 
     rows = max(len(levels), len(freqs))
-    out = open(args.output, "w") if args.output else sys.stdout
+    table = [(i + 1, freqs[i] if i < len(freqs) else "", levels[i] if i < len(levels) else "")
+             for i in range(rows)]
+    rep = getattr(args, "rep", None)
+    if rep:
+        rep.heading(f"Sweep trace ({rows} points, {npts} declared)")
+        _trace_report(rep, "sweep", ["point", "frequency_Hz", "level"], table, 1, [(2, "trace A")],
+                      "Level (UPL units)")
+        return 0
+    out = _plain_out(args)
     out.write("point,frequency_Hz,level\n")
-    for i in range(rows):
-        f = freqs[i] if i < len(freqs) else ""
-        l = levels[i] if i < len(levels) else ""
-        out.write(f"{i+1},{f},{l}\n")
-    if args.output:
-        out.close()
-        print(f"Wrote {rows} points (declared {npts}) to {args.output}")
+    for row in table:
+        out.write(",".join(str(x) for x in row) + "\n")
+    _close_plain(out, args, f"Wrote {rows} points (declared {npts}) to {args.output}")
     return 0
 
 
@@ -441,25 +482,32 @@ def cmd_autoexport(upl, args):
         lev2 = grab_trace("TRAC2") if args.both else None
 
         ts = datetime.datetime.now()
-        if args.output:
-            name = ts.strftime(args.output) if "%" in args.output else args.output
-        else:
-            name = ts.strftime("upl_%Y%m%d_%H%M%S.csv")
-
         rows = max(len(freqs), len(lev1), len(lev2) if lev2 else 0)
-        with open(name, "w") as out:
-            out.write(f"# R&S UPL export  {ts.isoformat()}  points={npts}\n")
-            out.write("# values in basic units (e.g. V for level); scale as needed\n")
-            hdr = "point,frequency_Hz,ch1" + (",ch2" if lev2 else "") + "\n"
-            out.write(hdr)
-            for i in range(rows):
-                f = freqs[i] if i < len(freqs) else ""
-                a = lev1[i] if i < len(lev1) else ""
-                line = f"{i+1},{f},{a}"
-                if lev2 is not None:
-                    line += f",{lev2[i] if i < len(lev2) else ''}"
-                out.write(line + "\n")
-        print(f"[{rep+1}/{reps}] wrote {rows} points -> {name}")
+        header = ["point", "frequency_Hz", "ch1"] + (["ch2"] if lev2 else [])
+        table = []
+        for i in range(rows):
+            row = [i + 1, freqs[i] if i < len(freqs) else "", lev1[i] if i < len(lev1) else ""]
+            if lev2 is not None:
+                row.append(lev2[i] if i < len(lev2) else "")
+            table.append(row)
+        comments = [f"R&S UPL export  {ts.isoformat()}  points={npts}",
+                    "values in basic units (e.g. V for level); scale as needed"]
+        run = getattr(args, "rep", None)
+        if run:
+            tag = f"capture_{rep + 1:02d}" if reps > 1 else "capture"
+            run.heading(f"Capture {rep + 1} of {reps}, {ts:%H:%M:%S}" if reps > 1 else "Capture")
+            _trace_report(run, tag, header, table, 1,
+                          [(2, "ch1")] + ([(3, "ch2")] if lev2 else []), "Level (UPL units)",
+                          comments=comments)
+        else:
+            name = ts.strftime(args.output) if "%" in args.output else args.output
+            with open(name, "w") as out:
+                for c in comments:
+                    out.write(f"# {c}\n")
+                out.write(",".join(header) + "\n")
+                for row in table:
+                    out.write(",".join(str(x) for x in row) + "\n")
+            print(f"[{rep+1}/{reps}] wrote {rows} points -> {name}")
         if rep + 1 < reps:
             time.sleep(max(0.0, args.interval))
     return 0
@@ -672,21 +720,30 @@ def _nsweep(upl, args):
         upl.write("SOUR:FREQ:MODE FIX")
 
     rows = max(len(freqs), len(levels), len(lev2) if lev2 else 0)
-    out = open(args.output, "w") if args.output else sys.stdout
+    header = ["point", "frequency_Hz", "ch1"] + (["ch2"] if lev2 else [])
+    table = []
+    for i in range(rows):
+        row = [i + 1, freqs[i] if i < len(freqs) else "", levels[i] if i < len(levels) else ""]
+        if lev2 is not None:
+            row.append(lev2[i] if i < len(lev2) else "")
+        table.append(row)
+    comment = f"R&S UPL native sweep  func={args.func}  feed={feed}  points={npts}"
+    rep = getattr(args, "rep", None)
+    if rep:
+        rep.info("Function", args.func)
+        rep.info("Sweep", f"{args.start:g}-{args.stop:g} Hz, {args.points} points, {args.spacing}")
+        rep.heading(f"Native sweep: {args.func}")
+        _trace_report(rep, "nsweep", header, table, 1, [(2, "ch1")] + ([(3, "ch2")] if lev2 else []),
+                      f"{args.func} (UPL units)", comments=[comment], logx=args.spacing == "log")
+        return 0
+    out = _plain_out(args)
     try:
-        out.write(f"# R&S UPL native sweep  func={args.func}  feed={feed}  points={npts}\n")
-        out.write("point,frequency_Hz,ch1" + (",ch2" if lev2 else "") + "\n")
-        for i in range(rows):
-            f = freqs[i] if i < len(freqs) else ""
-            a = levels[i] if i < len(levels) else ""
-            line = f"{i+1},{f},{a}"
-            if lev2 is not None:
-                line += f",{lev2[i] if i < len(lev2) else ''}"
-            out.write(line + "\n")
+        out.write(f"# {comment}\n")
+        out.write(",".join(header) + "\n")
+        for row in table:
+            out.write(",".join(str(x) for x in row) + "\n")
     finally:
-        if args.output:
-            out.close()
-            print(f"Wrote {rows} points to {args.output}")
+        _close_plain(out, args, f"Wrote {rows} points to {args.output}")
     return 0
 
 
@@ -742,17 +799,32 @@ def _fft(upl, args):
         print(f"WARNING: got {len(freqs)} lines but expected ~{expect}. "
               "Block paging may not be working on this firmware.", file=sys.stderr)
 
-    out = open(args.output, "w") if args.output else sys.stdout
+    comment = (f"R&S UPL FFT  size={args.size} zoom={args.zoom} window={args.window} "
+               f"res={res} lines={len(freqs)}")
+    rep = getattr(args, "rep", None)
+    if rep:
+        rep.info("FFT", f"size {args.size}, zoom {args.zoom}, window {args.window}, resolution {res}")
+        rep.csv("fft.csv", ["freq_Hz", "level"], [(f"{f:.4f}", v) for f, v in zip(freqs, levels)],
+                comments=[comment])
+        rep.heading(f"Spectrum ({len(freqs)} lines)")
+
+        def dbv(v):
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                return float("nan")
+            return 20 * math.log10(v) if v > 0 and not is_na(v) else float("nan")
+        rep.plot("fft", [("spectrum", freqs, [dbv(v) for v in levels])], xlabel="Frequency (Hz)",
+                 ylabel="Level (dBV, if the unit is V)", logx=args.zoom == 1, markers=False)
+        return 0
+    out = _plain_out(args)
     try:
-        out.write(f"# R&S UPL FFT  size={args.size} zoom={args.zoom} window={args.window} "
-                  f"res={res} lines={len(freqs)}\n")
+        out.write(f"# {comment}\n")
         out.write("freq_Hz,level\n")
         for f, v in zip(freqs, levels):
             out.write(f"{f:.4f},{v}\n")
     finally:
-        if args.output:
-            out.close()
-            print(f"Wrote {len(freqs)} lines to {args.output}")
+        _close_plain(out, args, f"Wrote {len(freqs)} lines to {args.output}")
     return 0
 
 
@@ -898,16 +970,28 @@ def cmd_diagdump(upl, args):
         print(f"  {sel:13s} {len(words):4d} words  [{stop}]  {preview}", file=sys.stderr)
 
     ts = datetime.datetime.now()
-    base = args.output or ts.strftime("diagdump_%Y%m%d_%H%M%S")
-    base = base[:-4] if base.lower().endswith((".csv", ".txt")) else base
-    with open(base + ".csv", "w") as f:
-        f.write(f"# UPL DIAG:DEV read-only dump  {ts.isoformat()}\n# *IDN? {idn}\n")
-        f.write("device,addr,raw_value\n")
-        for sel, addr, val in rows:
-            f.write(f"{sel},{addr},{val}\n")
-    with open(base + ".json", "w") as f:
-        json.dump({"timestamp": ts.isoformat(), "idn": idn, "devices": summary}, f, indent=2)
-    print(f"wrote {len(rows)} words -> {base}.csv / {base}.json", file=sys.stderr)
+    rep = getattr(args, "rep", None)
+    if rep:
+        rep.info("UPL", idn)
+        rep.csv("diag.csv", ["device", "addr", "raw_value"], rows,
+                comments=[f"UPL DIAG:DEV read-only dump  {ts.isoformat()}", f"*IDN? {idn}"])
+        rep.json("diag.json", {"timestamp": ts.isoformat(), "idn": idn, "devices": summary})
+        rep.note("Per-unit identity and option key: keep with the disk image; never share.", warn=True)
+        rep.heading("Tables read")
+        rep.table(["Selector", "Status", "Words", "Stopped because", "First values"],
+                  [(k, v.get("status"), v.get("words", ""), v.get("stop", v.get("error", "")),
+                    " ".join(v.get("values", [])[:8])) for k, v in summary.items()])
+    else:
+        base = args.output
+        base = base[:-4] if base.lower().endswith((".csv", ".txt")) else base
+        with open(base + ".csv", "w") as f:
+            f.write(f"# UPL DIAG:DEV read-only dump  {ts.isoformat()}\n# *IDN? {idn}\n")
+            f.write("device,addr,raw_value\n")
+            for sel, addr, val in rows:
+                f.write(f"{sel},{addr},{val}\n")
+        with open(base + ".json", "w") as f:
+            json.dump({"timestamp": ts.isoformat(), "idn": idn, "devices": summary}, f, indent=2)
+        print(f"wrote {len(rows)} words -> {base}.csv / {base}.json", file=sys.stderr)
     print("Keep these files with the disk image: they are this unit's identity and calibration.",
           file=sys.stderr)
     return 0
@@ -1188,6 +1272,7 @@ def main():
                         "(MMEM:STOR/LOAD:STAT 2, the FLAT_GEN.BAS idiom); writes a scratch file on the UPL")
     p.add_argument("--state-file", default=STATE_TMP,
                    help=f"scratch path on the UPL used by --preserve (default {STATE_TMP})")
+    add_output_args(p, default_label=None)
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("probe", help="send *IDN? to confirm remote control (UPL-B4) is live")
@@ -1196,10 +1281,11 @@ def main():
     r.add_argument("--no-trigger", action="store_true", help="do not send INIT;*WAI first")
 
     s = sub.add_parser("sweep", help="capture the current sweep trace to CSV")
-    s.add_argument("-o", "--output", help="CSV file (default: stdout)")
+    s.add_argument("-o", "--output", help="write only the CSV to this file (- = print it) instead of a results folder")
 
     a = sub.add_parser("autoexport", help="trigger a fresh sweep and pull trace(s)+x-axis to a timestamped CSV")
-    a.add_argument("-o", "--output", help="output name; may contain strftime codes (default upl_<timestamp>.csv)")
+    a.add_argument("-o", "--output", help="write plain CSV file(s) with this name instead of a results "
+                                          "folder; may contain strftime codes, e.g. upl_%%H%%M%%S.csv")
     a.add_argument("--setup", help="UPL setup file to MMEM:LOAD:STAT first, e.g. C:\\UPL\\MYSETUP.SAC")
     a.add_argument("--both", action="store_true", help="also capture channel 2 (TRAC2)")
     a.add_argument("--settle", type=float, default=0.5, help="seconds to wait after INIT if not using --opc")
@@ -1222,7 +1308,7 @@ def main():
                    help="leave the generator in sweep mode afterwards (default restores FIX)")
     n.add_argument("--sweep-timeout", type=float, default=120.0,
                    help="reply timeout while the sweep runs; 40 points took ~17s live (default 120)")
-    n.add_argument("-o", "--output", help="CSV file (default: stdout)")
+    n.add_argument("-o", "--output", help="write only the CSV to this file (- = print it) instead of a results folder")
 
     ff = sub.add_parser("fft", help="run an FFT and read the WHOLE spectrum (pages the 1024-line block limit)")
     ff.add_argument("--size", choices=sorted(FFT_SIZES, key=int), default="8192", help="FFT size (default 8192)")
@@ -1233,7 +1319,7 @@ def main():
     ff.add_argument("--max-blocks", type=int, default=FFT_MAX_BLOCKS, help="block-index ceiling (default 8)")
     ff.add_argument("--no-reset", dest="reset", action="store_false", help="skip the leading *RST")
     ff.add_argument("--fft-timeout", type=float, default=120.0, help="reply timeout while the FFT runs (default 120)")
-    ff.add_argument("-o", "--output", help="CSV file (default: stdout)")
+    ff.add_argument("-o", "--output", help="write only the CSV to this file (- = print it) instead of a results folder")
 
     st = sub.add_parser("storetrace", help="tell the UPL to write its current trace to a file on its own disk")
     st.add_argument("remote", help="path on the UPL, e.g. C:\\UPL\\FR.EXP")
@@ -1250,7 +1336,7 @@ def main():
                                       f"allowed: {','.join(DIAG_ALLOWED)}")
     dd.add_argument("--max-addr", type=int, default=2048,
                     help="stop walking a table after this many addresses (default 2048 = the X24164's size)")
-    dd.add_argument("-o", "--output", help="output base name; writes <name>.csv and <name>.json")
+    dd.add_argument("-o", "--output", help="write <name>.csv and <name>.json instead of a results folder")
 
     sub.add_parser("seqcheck", help="offline: assert the nsweep/storetrace SCPI matches the documented sequences")
 
@@ -1281,8 +1367,7 @@ def main():
         if not args.port:
             p.error("--port is required (or use --dry-run)")
         upl = connect(args.port, args.baud, args.timeout)
-    try:
-        return {
+    fn = {
             "probe": cmd_probe,
             "read": cmd_read,
             "sweep": cmd_sweep,
@@ -1294,9 +1379,22 @@ def main():
             "catalog": cmd_catalog,
             "getfile": cmd_getfile,
             "raw": cmd_raw,
-        }[args.cmd](upl, args)
+        }[args.cmd]
+    try:
+        if args.cmd not in REPORTED or args.output:
+            args.rep = None
+            return fn(upl, args)
+        label = ("dryrun_" if args.dry_run else "") + (args.label or REPORTED[args.cmd])
+        with Run(args.cmd, label=label, outdir=args.outdir, title=f"UPL {args.cmd}") as args.rep:
+            if not args.dry_run and args.cmd != "diagdump":
+                args.rep.info("UPL", upl.query("*IDN?").strip())
+            return fn(upl, args)
     finally:
         upl.close()
+
+
+# commands that write a results folder unless -o is given, and their default label
+REPORTED = {"sweep": "trace", "nsweep": "sweep", "fft": "fft", "autoexport": "trace", "diagdump": "unit"}
 
 
 if __name__ == "__main__":

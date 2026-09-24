@@ -64,8 +64,8 @@ Usage:
   python measurements/dac_test.py --port COM7 --source pc --device 16 --fs 48000 \
       --dut m51 volsweep
 
-Output: results/dac/<label>_<timestamp>/ -- one CSV per test and
-summary.txt (everything printed to the console).
+Output: results/dac/<label>_<timestamp>/ (or --outdir) -- report.html with
+tables and graphs, one CSV per test, and summary.txt (everything printed).
 
 NOT YET RUN AGAINST HARDWARE (written 2026-09-24). Everything below is from
 Vol.2 and has never been sent to this unit:
@@ -88,7 +88,6 @@ problem); 9.93e37 and -240 dB are "no value" sentinels; *RST does not clear
 the error queue, so *CLS.
 """
 import argparse
-import csv
 import math
 import os
 import sys
@@ -98,6 +97,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from upl_capture import connect, DryRunUPL, read_fft, preserve_state  # noqa: E402
+from report import Run, add_output_args, is_na, SERIES  # noqa: E402
 
 SENTINEL = 9e36
 
@@ -189,12 +189,151 @@ class Log:
             self.fp.flush()
 
 
-def write_csv(path, header, rows, log):
-    with open(path, "w", newline="") as fp:
-        w = csv.writer(fp)
-        w.writerow(header)
-        w.writerows(rows)
-    log(f"  -> {path}")
+# ---------------------------------------------------------------- the report
+# Each test's rows go to <name>.csv unchanged; report_test() adds the readable
+# tables and graphs to report.html. L is always blue, R always orange.
+
+L_COL, R_COL = SERIES[0], SERIES[1]
+TITLES = {
+    "check": "Lock, full-scale level, balance, DC", "stability": "Stability",
+    "fr": "Frequency response", "thdn": "THD+N and THD", "fft": "Spectrum of a tone",
+    "images": "Images above fs/2 (wideband spectrum)", "imd": "Intermodulation distortion",
+    "xtalk": "Crosstalk", "zout": "Output impedance", "polarity": "Polarity",
+    "jitter": "Jitter transfer", "interface": "Interface robustness", "jtest": "J-test",
+    "multitone": "Multitone", "linearity": "Linearity", "imdlevel": "IMD vs level",
+    "filter": "Reconstruction filter (white noise)", "volsweep": "DUT volume sweep",
+}
+
+
+def _f(v):
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return float("nan")
+    return float("nan") if is_na(v) else v
+
+
+def _dbv(v):
+    v = _f(v)
+    return 20 * math.log10(v) if v > 0 else float("nan")
+
+
+def _groups(recs, *keys):
+    """Records grouped by the values of `keys`, in first-seen order."""
+    out = {}
+    for r in recs:
+        out.setdefault(tuple(r[k] for k in keys), []).append(r)
+    return out
+
+
+def _lr(recs, x, l, r, lab="", style=None):
+    """An L (blue) and an R (orange) series from the same records."""
+    style = style or {}
+    xs = [_f(q[x]) for q in recs]
+    return [(f"{lab}L", xs, [_f(q[l]) for q in recs], {"color": L_COL, **style}),
+            (f"{lab}R", xs, [_f(q[r]) for q in recs], {"color": R_COL, **style})]
+
+
+def report_test(rep, name, header, rows):
+    """Readable tables and graphs for one test's rows (the CSV has them all)."""
+    rep.heading(TITLES.get(name, name))
+    if not rows:
+        rep.note("No results.", warn=True)
+        return
+    recs = [dict(zip(header, r)) for r in rows]
+    dash = {"linestyle": "--"}
+    if name == "fr":
+        for (fs, an), g in _groups(recs, "fs", "analyzer").items():
+            first = [q for q in g if str(q["pass"]) == "1"]
+            series = []
+            for mode, lab, style in (("RMSS", "selective ", {}),
+                                     ("RMS", "broadband ", {"linestyle": "--", "linewidth": 1.0})):
+                m = [q for q in first if q["mode"] == mode]
+                if m:
+                    series += _lr(m, "freq_Hz", "L_dB_re997", "R_dB_re997", lab, style)
+            rep.plot(f"fr_{fs}_{an}", series, title=f"Frequency response, {fs} Hz, {an}",
+                     xlabel="Frequency (Hz)", ylabel="dB re 997 Hz", logx=True)
+            rep.plot(f"fr_balance_{fs}_{an}",
+                     [(f"pass {p}, {'selective' if m == 'RMSS' else 'broadband'}",
+                       [_f(q["freq_Hz"]) for q in gg], [_f(q["LminusR_dB"]) for q in gg])
+                      for (p, m), gg in _groups(g, "pass", "mode").items()],
+                     title=f"L − R, {fs} Hz, {an} (repeat passes should lie on top of each other)",
+                     xlabel="Frequency (Hz)", ylabel="L − R (dB)", logx=True, height=3.2)
+    elif name == "thdn":
+        for (fs, an), g in _groups(recs, "fs", "analyzer").items():
+            for sweep, xl in (("level", "Level (dBFS)"), ("freq", "Frequency (Hz)")):
+                s = [q for q in g if q["sweep"] == sweep]
+                series = []
+                for func, lab, style in (("THDN", "THD+N ", {}), ("THD", "THD ", dash)):
+                    ss = [q for q in s if q["func"] == func]
+                    if ss:
+                        series += _lr(ss, "x", "L", "R", lab, style)
+                if series:
+                    rep.plot(f"thdn_{sweep}_{fs}_{an}", series,
+                             title=f"THD+N and THD vs {'level' if sweep == 'level' else 'frequency'}, {fs} Hz, {an}",
+                             xlabel=xl, ylabel="dB", logx=(sweep == "freq"))
+            other = [q for q in g if q["sweep"] not in ("level", "freq")]
+            if other:
+                rep.table(["fs", "analyzer", "measurement", "x", "L", "R"],
+                          [(q["fs"], q["analyzer"], f"{q['sweep']} {q['func']}", q["x"], q["L"], q["R"])
+                           for q in other], title=f"Dynamic range and idle noise, {fs} Hz, {an}")
+    elif name in ("fft", "images", "filter", "multitone", "jtest"):
+        keys = {"jtest": ("fs", "bits"), "filter": ("fs",), "multitone": ("fs",)}.get(name, ("fs", "analyzer"))
+        for k, g in _groups(recs, *keys).items():
+            tag = ", ".join(f"{x} bit" if key == "bits" else f"{x} Hz" if key == "fs" else str(x)
+                            for key, x in zip(keys, k))
+            rep.plot(f"{name}_{'_'.join(str(x) for x in k)}",
+                     [(tag, [_f(q["freq_Hz"]) for q in g], [_dbv(q["level_V"]) for q in g])],
+                     title=f"{TITLES[name]}, {tag}", xlabel="Frequency (Hz)", ylabel="Level (dBV)",
+                     logx=name != "jtest", markers=False)
+    elif name == "xtalk":
+        for (fs,), g in _groups(recs, "fs").items():
+            xs = [_f(q["freq_Hz"]) for q in g]
+            rep.plot(f"xtalk_{fs}", [("L → R", xs, [_f(q["LtoR_dB"]) for q in g], {"color": L_COL}),
+                                     ("R → L", xs, [_f(q["RtoL_dB"]) for q in g], {"color": R_COL})],
+                     title=f"Crosstalk, {fs} Hz", xlabel="Frequency (Hz)", ylabel="dB", logx=True)
+        rep.table(header, rows)
+    elif name == "linearity":
+        for (fs,), g in _groups(recs, "fs").items():
+            rep.plot(f"linearity_{fs}", _lr(g, "set_dBFS", "L_err_dB", "R_err_dB"),
+                     title=f"Linearity error, {fs} Hz", xlabel="Set level (dBFS)",
+                     ylabel="Error (dB)", hlines=[(0, None)])
+        rep.table(header, rows)
+    elif name == "imdlevel":
+        for (fs, test), g in _groups(recs, "fs", "test").items():
+            rep.plot(f"imdlevel_{fs}_{test}", _lr(g, "level_dBFS", "L_dB", "R_dB"),
+                     title=f"{test} IMD vs level, {fs} Hz", xlabel="Level (dBFS)", ylabel="IMD (dB)")
+        rep.table(header, rows)
+    elif name == "jitter":
+        for (fs, cab), g in _groups(recs, "fs", "cable_sim").items():
+            xs = [_f(q["fj_Hz"]) for q in g]
+            rep.plot(f"jitter_{fs}_{cab}",
+                     [("measured sideband", xs, [_f(q["sideband_dBc"]) for q in g]),
+                      ("no rejection (predicted)", xs, [_f(q["predicted_dBc"]) for q in g], dash),
+                      ("noise floor", xs, [_f(q["floor_dBc"]) for q in g], {"linestyle": ":"})],
+                     title=f"Jitter sidebands, {fs} Hz{', cable simulator' if str(cab) == 'True' else ''}",
+                     xlabel="Jitter frequency (Hz)", ylabel="dBc", logx=True)
+        rep.table(header, rows)
+    elif name == "volsweep":
+        for (fs,), g in _groups(recs, "fs").items():
+            rep.plot(f"volsweep_{fs}", _lr(g, "volume_dB", "THDN_L_dB", "THDN_R_dB", "THD+N ")
+                     + _lr(g, "volume_dB", "THD_L_dB", "THD_R_dB", "THD ", dash),
+                     title=f"THD+N and THD vs DUT volume, {fs} Hz", xlabel="Volume (dB)", ylabel="dB")
+        rep.table(header, rows)
+    elif name == "stability":
+        lv = [q for q in recs if str(q["item"]).startswith("level_")]
+        if lv:
+            n = list(range(1, len(lv) + 1))
+            rep.plot("stability_levels",
+                     [("L", n, [_dbv(q["L"]) for q in lv], {"color": L_COL}),
+                      ("R", n, [_dbv(q["R"]) for q in lv], {"color": R_COL})],
+                     title="Repeated 997 Hz level readings (should be flat)",
+                     xlabel="Reading", ylabel="Level (dBV)", height=3.2)
+        rep.table(header, [r for r, q in zip(rows, recs) if not str(q["item"]).startswith("level_")])
+    elif len(rows) > 60:
+        rep.note(f"{len(rows)} rows: see {name}.csv.")
+    else:
+        rep.table(header, rows)
 
 
 # ---------------------------------------------------------------- the rig
@@ -1402,7 +1541,7 @@ ALL_PLAN = [
 ]
 
 
-def run(rig, a, outdir, log):
+def run(rig, a, rep, log):
     """A single test at every --fs."""
     name = "images" if (a.test == "fft" and a.images) else a.test
     if name in rig.src.unsupported:
@@ -1413,10 +1552,13 @@ def run(rig, a, outdir, log):
         return
     fn, header = TESTS[name]
     ctx, rows = {}, []
-    for fs in a.fs:
-        log(f"\n=== {name} @ {fs} Hz ===")
-        rows += fn(rig, a, fs, ctx)
-    write_csv(os.path.join(outdir, f"{name}.csv"), header, rows, log)
+    try:
+        for fs in a.fs:
+            log(f"\n=== {name} @ {fs} Hz ===")
+            rows += fn(rig, a, fs, ctx)
+    finally:                                   # a failed rate keeps the earlier ones
+        rep.csv(f"{name}.csv", header, rows)
+        report_test(rep, name, header, rows)
 
 
 def main():
@@ -1438,8 +1580,7 @@ def main():
     p.add_argument("--ground", action="store_true", help="INP:LOW GRO instead of FLOat")
     p.add_argument("--settle", type=float, default=0.3, help="seconds after each generator change")
     p.add_argument("--relock", type=float, default=2.0, help="seconds to let the DAC relock")
-    p.add_argument("--label", default="dac")
-    p.add_argument("--outdir", help="default results/spdif_dac/<label>_<timestamp>")
+    add_output_args(p, default_label="dac")
     p.add_argument("--no-reset", action="store_true", help="skip the initial *RST")
     p.add_argument("--preserve", action="store_true",
                    help="snapshot the UPL setup first and restore it at the end (MMEM:STOR:STAT 2)")
@@ -1529,29 +1670,37 @@ def main():
     a.ui = min(a.ui, 0.25)
     a.spec = load_spec(a.dut_spec) if a.dut_spec else None
 
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    outdir = a.outdir or os.path.join("results", "dac", f"{a.label}_{stamp}")
-    os.makedirs(outdir, exist_ok=True)
-    log = Log(os.path.join(outdir, "summary.txt"))
-
     if a.dry_run:
         u = DryRunUPL(echo=False)
     else:
         if not a.port:
             p.error("--port is required (or use --dry-run)")
         u = connect(a.port, a.baud, a.timeout)
+    label = ("dryrun_" if a.dry_run else "") + a.label
+    with Run("dac", label=label, outdir=a.outdir, title=f"DAC test: {a.test}") as rep:
+        _main(u, a, rep)
+
+
+def _main(u, a, rep):
+    log = Log(None)                     # printed; the report copies it into summary.txt
     rig = Rig(u, log, a, a.source)
     rig.dut = None
     if a.dut:
         rig.dut = DryDut(a.dut) if a.dry_run else DUTS[a.dut](a.dut_port)
     log(f"# dac_test {a.test}  label={a.label}  source={a.source}  fs={a.fs}  "
         f"{time.strftime('%Y-%m-%d %H:%M:%S')}")
-    log(f"# UPL: {rig.q('*IDN?')}")
+    idn = rig.q("*IDN?")
+    log(f"# UPL: {idn}")
+    rep.info("UPL", idn)
+    rep.info("Source", a.source + (f" (device {a.device})" if a.source == "pc" else ""))
+    rep.info("Sample rates", ", ".join(str(f) for f in a.fs))
     if a.spec:
         log(f"# DUT reference: {a.spec.get('name', a.dut_spec)}")
+        rep.info("DUT reference", a.spec.get("name", a.dut_spec))
     try:
         if rig.dut:
             log(f"# DUT: {rig.dut.describe()}")
+            rep.info("DUT", rig.dut.describe())
             if a.volume is not None:
                 rig.dut.set_volume(a.volume)
                 log(f"# DUT volume set to {a.volume:g} dB for this run (restored at the end)")
@@ -1560,9 +1709,9 @@ def main():
                 rig.setc("*RST", slow=True)
                 rig.w("*CLS")
             if a.test == "all":
-                run_all(rig, a, outdir, log)
+                run_all(rig, a, rep, log)
             else:
-                run(rig, a, outdir, log)
+                run(rig, a, rep, log)
             rig.cleanup()
     finally:
         if rig.dut:
@@ -1576,11 +1725,13 @@ def main():
             log(f"\n# {len(rig.rejected)} command(s) rejected by the UPL:")
             for c, e in rig.rejected:
                 log(f"#   {c}  [{e}]")
+            rep.heading("Commands the UPL rejected")
+            rep.table(["command", "error"], rig.rejected)
         u.close()
-    log(f"\n# done -> {outdir}")
+    log(f"\n# done -> {rep.dir}")
 
 
-def run_all(rig, a, outdir, log):
+def run_all(rig, a, rep, log):
     """`all` with per-test levels: fr at -10 dBFS, fft at -1, imd at -3."""
     ctx = {}
     per_test_level = {"fr": -10.0, "fft": -1.0, "images": -1.0, "imd": -3.0}
@@ -1598,10 +1749,13 @@ def run_all(rig, a, outdir, log):
             rates = [48000] if 48000 in a.fs else a.fs[:1]
         a.level = per_test_level.get(name, a.level)
         rows = []
-        for fs in rates:
-            log(f"\n=== {name} @ {fs} Hz ===")
-            rows += fn(rig, a, fs, ctx)
-        write_csv(os.path.join(outdir, f"{name}.csv"), header, rows, log)
+        try:
+            for fs in rates:
+                log(f"\n=== {name} @ {fs} Hz ===")
+                rows += fn(rig, a, fs, ctx)
+        finally:
+            rep.csv(f"{name}.csv", header, rows)
+            report_test(rep, name, header, rows)
 
 
 if __name__ == "__main__":

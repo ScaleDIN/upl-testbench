@@ -12,16 +12,19 @@ along the way (leftover UPL digital-instrument state; a muted DCX output) that a
 before assuming a flat/all-noise result means the link is broken.
 
 Usage examples:
-  # One highpass curve on output 1, 500Hz LR24, lowpass disabled, save + print
+  # One highpass curve on output 1, 500Hz LR24, lowpass disabled
   python dcx_sweep.py --dcx-port COM2 --upl-port COM7 --out-ch out1 \
-      --hp-freq 500 --hp-type lr24 --lp-type off -o sweep_500hz.csv
+      --hp-freq 500 --hp-type lr24 --lp-type off --label hp500_lr24
 
-  # Sweep several HP cutoffs in one run, one CSV column per cutoff
+  # Sweep several HP cutoffs in one run, one CSV column (and one curve) per cutoff
   python dcx_sweep.py --dcx-port COM2 --upl-port COM7 --out-ch out1 \
-      --hp-freq 100,300,1000,3000 --hp-type lr24 --lp-type off -o family.csv
+      --hp-freq 100,300,1000,3000 --hp-type lr24 --lp-type off --label hp_family
 
   # Just re-measure whatever the DCX is currently configured to (no DCX writes at all)
-  python dcx_sweep.py --dcx-port COM2 --upl-port COM7 --out-ch out1 --no-configure -o asis.csv
+  python dcx_sweep.py --dcx-port COM2 --upl-port COM7 --out-ch out1 --no-configure --label asis
+
+Output: results/dcx_sweep/<label>_<timestamp>/ -- report.html (graph + table), sweep.csv,
+summary.txt. -o FILE writes just the CSV to FILE instead.
 
 Before trusting a result: if every point comes back suspiciously identical, check the UPL's
 INST?/INST2?/INP:TYPE? (should NOT be D48/D48/INT unless you intend a digital test). If every
@@ -30,11 +33,13 @@ point is noise-floor with no frequency lock, check the DCX output isn't muted.
 
 import argparse
 import csv
+import math
 import sys
 import time
 
 try:
     from upl_capture import connect
+    from report import Run, add_output_args, is_na
 except ImportError:
     sys.exit("upl_capture.py must be in the same folder.")
 try:
@@ -99,8 +104,9 @@ class Sweeper:
             self.setc(c)
         self.drain()
 
-    def run_sweep(self, label=""):
-        rows = []
+    def run_sweep(self, label="", rows=None):
+        """Sweep; appends (freq, level) to `rows` as it goes, so a failure keeps what was measured."""
+        rows = [] if rows is None else rows
         for f in self.freqs:
             self.setc("SOUR:FREQ %.2f HZ;*wai" % f, quiet=True)
             time.sleep(self.settle)
@@ -139,39 +145,73 @@ def main():
     p.add_argument("--lp-freq", type=float, default=None)
     p.add_argument("--lp-type", default=None, choices=FILTER_TYPES)
     p.add_argument("--gain-db", type=float, default=None)
-    p.add_argument("-o", "--output", required=True, help="CSV output path")
+    p.add_argument("-o", "--output", help="write only the CSV to this file instead of a results folder")
+    add_output_args(p)
     args = p.parse_args()
 
     sw = Sweeper(args.dcx_port, args.upl_port, args.dcx_baud, args.upl_baud,
                  args.gen_level, args.settle, args.points, args.fmin, args.fmax)
-    try:
-        sw.configure_upl()
+    all_runs = {}
+    if args.output:
+        try:
+            measure(sw, args, all_runs)
+        finally:
+            sw.close()
+            header, rows = table(sw, all_runs)
+            with open(args.output, "w", newline="") as fp:
+                w = csv.writer(fp)
+                w.writerow(header)
+                w.writerows(rows)
+            print("\nWrote %s" % args.output)
+        return 0
+    with Run("dcx_sweep", label=args.label or args.out_ch, outdir=args.outdir,
+             title="DCX2496 frequency response") as rep:
+        rep.info("DCX output", args.out_ch)
+        rep.info("DCX settings", "left as they are" if args.no_configure else
+                 f"HP {args.hp_freq} {args.hp_type or ''}, LP {args.lp_freq} {args.lp_type or ''}, "
+                 f"gain {args.gain_db}")
+        rep.info("Generator", f"{args.gen_level:g} V, {args.fmin:g}-{args.fmax:g} Hz, {args.points} points")
+        try:
+            measure(sw, args, all_runs)
+        finally:
+            sw.close()
+            header, rows = table(sw, all_runs)
+            rep.csv("sweep.csv", header, rows)
+            if all_runs:
+                rep.heading("Frequency response")
 
-        hp_list = [None]
-        if args.hp_freq is not None:
-            hp_list = [float(x) for x in args.hp_freq.split(",")]
-
-        all_runs = {}
-        for hpf in hp_list:
-            label = ""
-            if not args.no_configure:
-                label = "[HP=%sHz] " % hpf if hpf is not None else ""
-                print("=== configuring DCX %s: HP=%s LP=%s ===" % (args.out_ch, hpf, args.lp_freq))
-                sw.configure_dcx(args.out_ch, hp_freq=hpf, hp_type=args.hp_type,
-                                  lp_freq=args.lp_freq, lp_type=args.lp_type, gain_db=args.gain_db)
-            rows = sw.run_sweep(label)
-            all_runs[hpf if hpf is not None else "asis"] = rows
-
-        with open(args.output, "w", newline="") as fp:
-            w = csv.writer(fp)
-            keys = list(all_runs.keys())
-            w.writerow(["freq_hz"] + ["level_v_%s" % k for k in keys])
-            for i, f in enumerate(sw.freqs):
-                w.writerow([f] + [all_runs[k][i][1] for k in keys])
-        print("\nWrote %s" % args.output)
-    finally:
-        sw.close()
+                def dbv(v):
+                    return 20 * math.log10(v) if not is_na(v) and v > 0 else float("nan")
+                rep.plot("sweep", [(("HP %g Hz" % k) if k != "asis" else "as configured",
+                                    [p[0] for p in r], [dbv(p[1]) for p in r])
+                                   for k, r in all_runs.items()],
+                         xlabel="Frequency (Hz)", ylabel="Level (dBV)", logx=True)
+                rep.table(header, rows)
     return 0
+
+
+def measure(sw, args, all_runs):
+    sw.configure_upl()
+    hp_list = [None]
+    if args.hp_freq is not None:
+        hp_list = [float(x) for x in args.hp_freq.split(",")]
+    for hpf in hp_list:
+        label = ""
+        if not args.no_configure:
+            label = "[HP=%sHz] " % hpf if hpf is not None else ""
+            print("=== configuring DCX %s: HP=%s LP=%s ===" % (args.out_ch, hpf, args.lp_freq))
+            sw.configure_dcx(args.out_ch, hp_freq=hpf, hp_type=args.hp_type,
+                             lp_freq=args.lp_freq, lp_type=args.lp_type, gain_db=args.gain_db)
+        sw.run_sweep(label, all_runs.setdefault(hpf if hpf is not None else "asis", []))
+
+
+def table(sw, all_runs):
+    """(header, rows): one row per frequency, one level column per curve (partial curves padded)."""
+    keys = list(all_runs.keys())
+    header = ["freq_hz"] + ["level_v_%s" % k for k in keys]
+    rows = [[f] + [all_runs[k][i][1] if i < len(all_runs[k]) else "" for k in keys]
+            for i, f in enumerate(sw.freqs) if any(i < len(all_runs[k]) for k in keys)]
+    return header, rows
 
 
 if __name__ == "__main__":

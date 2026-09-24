@@ -215,25 +215,53 @@ def cmd_loopback(args):
 
 
 def cmd_response(args):
+    """Stepped-sine response. Default: a results folder (report.html + CSV);
+    -o FILE writes only the CSV there (-o - prints it)."""
     import sounddevice as sd
     freqs = np.geomspace(args.start, args.stop, args.points)
-    out = open(args.output, "w") if args.output else sys.stdout
-    out.write("frequency_Hz,level_dBFS,THDN_pct\n")
-    ref = None
-    for f in freqs:
-        tone = make_tone(f, args.dwell, args.level)
-        rec = sd.playrec(tone.reshape(-1, 1), samplerate=FS, channels=1,
-                         input_mapping=[1], dtype="float64",
-                         device=(args.in_device, args.out_device))
-        sd.wait()
-        x = rec[int(0.05*FS):, 0]
-        r = analyze_tone(x, FS)
-        if ref is None:
-            ref = r["level_dBFS"]
-        out.write(f"{f:.1f},{r['level_dBFS']-ref:.3f},{r['THDN_pct']:.4f}\n")
-        print(f"  {f:8.1f} Hz : {r['level_dBFS']-ref:+.2f} dB (rel), THD+N {r['THDN_pct']:.3f}%")
+    header = ["frequency_Hz", "level_dBFS", "THDN_pct"]
+    rows, ref = [], None
+
+    def sweep():
+        nonlocal ref
+        for f in freqs:
+            tone = make_tone(f, args.dwell, args.level)
+            rec = sd.playrec(tone.reshape(-1, 1), samplerate=FS, channels=1,
+                             input_mapping=[1], dtype="float64",
+                             device=(args.in_device, args.out_device))
+            sd.wait()
+            x = rec[int(0.05*FS):, 0]
+            r = analyze_tone(x, FS)
+            if ref is None:
+                ref = r["level_dBFS"]
+            rows.append((f"{f:.1f}", f"{r['level_dBFS']-ref:.3f}", f"{r['THDN_pct']:.4f}"))
+            print(f"  {f:8.1f} Hz : {r['level_dBFS']-ref:+.2f} dB (rel), THD+N {r['THDN_pct']:.3f}%")
+
     if args.output:
-        out.close(); print(f"Wrote {args.output}")
+        sweep()
+        out = sys.stdout if args.output == "-" else open(args.output, "w")
+        out.write(",".join(header) + "\n")
+        out.writelines(",".join(r) + "\n" for r in rows)
+        if out is not sys.stdout:
+            out.close(); print(f"Wrote {args.output}")
+        return 0
+    from report import Run
+    with Run("audio_response", label=args.label, outdir=args.outdir,
+             title="Soundcard frequency response") as rep:
+        rep.info("Devices", f"out {args.out_device}, in {args.in_device}, {args.level:g} dBFS")
+        try:
+            sweep()
+        finally:
+            rep.csv("response.csv", header, rows)
+            if rows:
+                xs = [float(r[0]) for r in rows]
+                rep.heading("Frequency response")
+                rep.plot("response", [("level", xs, [float(r[1]) for r in rows])],
+                         xlabel="Frequency (Hz)", ylabel="dB re first point", logx=True)
+                rep.heading("THD+N")
+                rep.plot("thdn", [("THD+N", xs, [float(r[2]) for r in rows])],
+                         xlabel="Frequency (Hz)", ylabel="THD+N (%)", logx=True, logy=True)
+                rep.table(header, rows)
     return 0
 
 
@@ -269,7 +297,11 @@ def main():
     rs = sub.add_parser("response", help="stepped-sine frequency response sweep -> CSV")
     rs.add_argument("--start", type=float, default=20.0); rs.add_argument("--stop", type=float, default=20000.0)
     rs.add_argument("--points", type=int, default=31); rs.add_argument("--level", type=float, default=-6.0)
-    rs.add_argument("--dwell", type=float, default=0.4); rs.add_argument("-o", "--output", default=None)
+    rs.add_argument("--dwell", type=float, default=0.4)
+    rs.add_argument("-o", "--output", default=None,
+                    help="write only the CSV to this file (- = print it) instead of a results folder")
+    rs.add_argument("--label", default="soundcard", help="name for this run's results folder")
+    rs.add_argument("--outdir", help="write into this folder instead of results/audio_response/<label>_<timestamp>/")
     rs.add_argument("--out-device", dest="out_device", default=None); rs.add_argument("--in-device", dest="in_device", default=None)
 
     args = p.parse_args()
