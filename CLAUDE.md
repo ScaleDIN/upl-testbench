@@ -200,7 +200,9 @@ and after its 0 dBFS point, and now does frequency before level. Live 00:03: bot
 −109/−110, THD+N vs frequency −106…−112 dB (vs −102…−105 latched), DR 125.4/125.5 dB A.
 **If THD+N readings look ~6 dB worse than expected: run any native RMS sweep, or power-cycle.**
 - Not fixed: `multitone` lets its two lowest tones share neighbouring bins (the 1.5 dB "tone span").
-- Polarity replies `'1 FS'` on both channels; meaning still unconfirmed against the panel.
+- **Polarity reply decoded (2026‑09‑25, live, M51 polarity flipped):** `SENS:DATA?` = `1 FS` ↔ panel
+  "+1 POL" (not inverted), `-1 FS` ↔ "−1 POL" (inverted); the FS unit means nothing. The first read
+  after a change can be the 9.93e37 sentinel — `dac_test` retries and prints normal/INVERTED.
 
 ## Goal / context
 

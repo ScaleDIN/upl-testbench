@@ -1322,10 +1322,18 @@ def t_polarity(rig, a, fs, ctx):
     rig.setc(f"SOUR:VOLT {lin(-6.0):.6g} FS", quiet=True)
     time.sleep(a.settle)
     rig.func("POL")
-    rig.trig()
-    r1, r2 = rig.q("SENS:DATA?"), rig.q("SENS:DATA2?")
-    log(f"   polarity: L {r1!r}  R {r2!r}   (raw replies; format unconfirmed -- "
-        "check against the ANLR panel the first time)")
+
+    def pol(reply):
+        # '1 FS' = panel "+1 POL" (not inverted), '-1 FS' = "-1 POL" (inverted); the
+        # unit is meaningless. Confirmed live 2026-09-25 by flipping the M51's polarity.
+        v, _ = parse(reply)
+        return None if v is None else ("normal (+1)" if v > 0 else "INVERTED (-1)")
+    for _ in range(3):                            # first read can be the sentinel mid-burst
+        rig.trig()
+        r1, r2 = rig.q("SENS:DATA?"), rig.q("SENS:DATA2?")
+        if pol(r1) and pol(r2):
+            break
+    log(f"   polarity: L {pol(r1) or 'no result'}  R {pol(r2) or 'no result'}   (raw {r1!r}, {r2!r})")
     rig.setc("SOUR:FUNC SIN", slow=True)
     return [(fs, r1, r2)]
 
