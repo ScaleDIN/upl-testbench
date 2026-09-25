@@ -412,8 +412,8 @@ DAC's. **`--source pc` is written and tested offline but not yet run live.**
 
 **The UPL source (`--source upl`, needs B2 or B29)** is bit-exact too, and the UPL sets the sample
 rate. It can also degrade the interface on purpose: jitter (with UPL‑B22), a 100 m cable
-simulator, low signal voltage, off-nominal sample rates, 16/20/24-bit words. Run live on two DACs
-with a B29; B2's 48 kHz limit comes from the manuals, not tried yet.
+simulator, low signal voltage, off-nominal sample rates, 16/20/24-bit words. Run live on three
+DACs with a B29; B2's 48 kHz limit comes from the manuals, not tried yet.
 
 | Test | PC source | UPL source (B2/B29) |
 |---|---|---|
@@ -528,7 +528,7 @@ python measurements/dac_test.py --dry-run all                  # offline: runs e
 python measurements/dac_test.py --port COM7 check              # lock, 0 dBFS level, balance, DC
 python measurements/dac_test.py --port COM7 fr                 # frequency response, diagnosed
 python measurements/dac_test.py --port COM7 --fs 44100 fft --images
-python measurements/dac_test.py --port COM7 --label mydac all  # the lot -- tens of minutes (untimed)
+python measurements/dac_test.py --port COM7 --label mydac all  # the lot: ~26 min at 4 rates on GPIB
 
 # USB DAC: the PC is the source (find N with `python measurements/upacd_test.py devices`)
 python measurements/dac_test.py --port COM7 --source pc --device N --fs 44100,96000,192000 \
@@ -596,9 +596,11 @@ python measurements/dac_test.py --port COM7 --source pc --device N --fs 44100,96
 | `filter` | `--fft-avg 16` |
 | `stability` | `--readings 20` `--monitor 0` (seconds of live L/R level streaming afterwards) |
 | `volsweep` | `--volumes -20,-15,-10,-6,-3,-1,0,1,3,6,10` `--level -1` |
+| `impulse` | `--period 0.01` s `--imp-level -3` dBFS `--avg 8` `--trig-frac 0.02` `--slope rise` (`fall` for an inverting DAC) `--trig-timeout 20` s |
+| `all` | `--with-impulse` (add `impulse`, last), plus `impulse`'s options |
 
-`setlevel`, `check`, `xtalk`, `zout`, `polarity`, `interface`, `linearity`, `imdlevel` and `all` take no
-options of their own; `all` uses the defaults above for every test.
+`setlevel`, `check`, `xtalk`, `zout`, `polarity`, `interface`, `linearity` and `imdlevel` take no
+options of their own; `all` uses the defaults above for every other test.
 
 **Response above 20 kHz:** `fr --wide`, or `fr --stop <Hz>`. A stop above 21 kHz switches to the
 100 kHz analyzer (A100) by itself. The sample rate sets the ceiling: a DAC can't output anything
@@ -612,11 +614,11 @@ figures under each result, from `measurements/dut_specs/<name>.json` (format in 
 README). One is included: `elektor-dac2000` (Elektor Audio DAC 2000, Elektor Electronics
 11/99–1/2000).
 
-**Comparing with Audio Science Review:** the last five tests plus `thdn` (which prints SINAD =
-−THD+N at 0 dBFS), `fr` and `fft` cover ASR's standard DAC set. Set the DAC to 2 V unbalanced /
+**Comparing with Audio Science Review:** `jtest`, `multitone`, `linearity`, `imdlevel` and `filter`,
+plus `thdn` (which prints SINAD = −THD+N at 0 dBFS), `fr` and `fft`, cover ASR's standard DAC set. Set the DAC to 2 V unbalanced /
 4 V balanced at 0 dBFS first if it has a volume control. Caveat: the UPL's own THD+N floor is
-about −103 to −106 dB (loopback), far above ASR's APx555, so SINAD numbers past ~100 dB are the
-UPL's limit, not the DAC's. Everything else (response, images, jitter lines, linearity,
+about −110 dB on a DAC (the M51 read −110 to −113; −103 when latched, see below), far above
+ASR's APx555, so SINAD numbers past ~105 dB are mostly the UPL's limit, not the DAC's. Everything else (response, images, jitter lines, linearity,
 crosstalk) stays comparable.
 
 88.2/96 kHz need B29's high rate mode (`CONF:DAI HRM`), which Vol.2 says also degrades the analog
@@ -627,11 +629,15 @@ frequency, spectra, crosstalk, jitter sidebands, linearity...), a CSV per test, 
 `summary.txt`. Every config command is error-checked, and anything the UPL rejected is listed at
 the end of the run.
 
-**Run live with `--source upl` (2026‑09‑24/25):** every test in the table above, on two DACs
-over optical at 44.1–96 kHz (results under `results/dac/`). The UPL quirks found on the way are
+**Run live with `--source upl` (2026‑09‑24/25):** every test in the table above except `volsweep`,
+on three DACs at 44.1–96 kHz, over RS‑232 and GPIB (results under `results/dac/`). `impulse` ran
+live for the first time on 2026‑09‑25; its step pre-shoot and ringing-frequency figures aren't
+reliable yet. The UPL quirks found on the way are
 handled in the script (see `CLAUDE.md`). One to know about: THD+N of a clipping 0 dBFS tone
 leaves the analyzer's THD+N floor ~6 dB worse until a native RMS sweep or a power cycle, so
-`thdn` clears it itself; if THD+N readings elsewhere look ~6 dB high, that's the cause.
+`thdn` clears it itself; if THD+N readings elsewhere look ~6 dB high, that's the cause. `thdn`'s
+`STILL LATCHED?` warning fires whenever the reset check reads above −106 dB, so on a DAC whose
+own THD+N is worse than that (e.g. −84 dB) it's a false alarm.
 **Not yet run live:** `--source pc` (USB DACs), `--dut` / `--volume`, and `volsweep`.
 
 ### Analog DUT characterization: preamps and friends (`measurements/analog_test.py`)

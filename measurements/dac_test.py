@@ -420,7 +420,7 @@ class Rig:
         l, r = ratio_db(v1, u1), ratio_db(v2, u2)
         bad = any(x is not None and x > -106 for x in (l, r))
         self.log(f"   THD+N floor reset (31-pt RMS sweep): -1 dBFS reads L {fmt(l, '%.1f')} R "
-                 f"{fmt(r, '%.1f')} dB" + ("   <- STILL LATCHED? power-cycle the UPL" if bad else ""))
+                 f"{fmt(r, '%.1f')} dB" + ("   <- STILL LATCHED? (or the DAC's own THD+N; power-cycle only if the DAC is cleaner than -106 dB)" if bad else ""))
 
     def sweep(self, freqs, dbfs):
         """Measure the current function at each of `freqs` (log-spaced, as from
