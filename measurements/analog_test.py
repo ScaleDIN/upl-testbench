@@ -38,7 +38,9 @@ Tests (subcommands), in the order worth running them:
              unweighted, A-weighted, CCIR-2k (ARM) and 110 kHz; S/N re --ref-out;
              EIN (noise referred to the input); hum spectrum of the idle output
   fft        spectrum of a 1 kHz tone at --vin: harmonic signature and hum
-  imd        SMPTE 60 Hz + 7 kHz 4:1, and CCIF 19 + 20 kHz (DFD), at --vin
+  imd        SMPTE 60 Hz + 7 kHz 4:1, and CCIF 19 + 20 kHz (DFD), at --vin; then SMPTE
+             with the upper tone at 2/4/7/12 kHz: dB/octave says whether the IMD is
+             frequency-dependent (feedback/slew), static, or an LF mechanism
   imdlevel   SMPTE and CCIF vs input level, --vin -40 dB up to +10 dB (<= --vmax)
   xtalk      crosstalk L->R and R->L, selective, 100 Hz-20 kHz
   zout       output impedance (200 kOhm vs 600 Ohm analyzer load)
@@ -762,12 +764,69 @@ def t_imd(rig, a, ctx):
     for kind, fn, tag in (("SMPTE", "MDIS", "SMPTE_60_7k"), ("CCIF", "DFD", "CCIF_19_20k")):
         rig.src.twin(kind, a.vin)
         rig.settle()
-        (v1, u1), (v2, u2) = rig.measure(fn)
-        d = (ratio_db(v1, u1), ratio_db(v2, u2))
+        d, _ = settled_read(rig, fn)
         log(f"   {kind} ({a.vin:g} V total): L {fmt(d[0], '%.1f')} dB  R {fmt(d[1], '%.1f')} dB")
         rows.append((tag, a.vin, d[0], d[1]))
     rig.spec("imd")
+    rows += smpte_carrier(rig, a)
     rig.src.sine()
+    return rows
+
+
+SMPTE_CARRIERS = (2000, 4000, 7000, 12000)
+SETTLE_TOL_DB = 0.3
+
+
+def settled_read(rig, fn, tol=SETTLE_TOL_DB, maxn=10):
+    """Re-trigger until two readings in a row agree within tol dB on both channels.
+    The DCX2496's SMPTE reading drifts ~2-3 dB better over the first ~30 s after the
+    signal changes (live 2026-09-25; the UPL in loopback is steady to +-1 dB), so a
+    single reading depends on how long the tone has been on. Returns ((L, R), n)."""
+    rig.func(fn)
+    prev = None
+    for n in range(1, maxn + 1):
+        rig.trig()
+        (v1, u1), (v2, u2) = rig.read12()
+        d = (ratio_db(v1, u1), ratio_db(v2, u2))
+        if prev and all(x is None or y is None or abs(x - y) <= tol for x, y in zip(d, prev)):
+            return d, n
+        prev = d
+        time.sleep(1.0)
+    return d, maxn
+
+
+def smpte_carrier(rig, a):
+    """SMPTE with the upper tone moved (60 Hz + 2/4/7/12 kHz, 4:1, --vin total).
+    Separates *where* an IMD comes from: rising with the carrier (~6 dB/oct =
+    an error proportional to dV/dt, i.e. feedback running out with frequency or
+    slew-type) versus flat (a static nonlinearity) versus falling with the carrier
+    (an LF mechanism, e.g. a coupling capacitor). The DCX2496 rose ~5 dB/oct
+    (2026-09-25); the UPL in loopback stays flat at ~-100 to -108 dB."""
+    log = rig.log
+    rig.src.twin("SMPTE", a.vin)
+    rows, pts = [], []
+    for hf in SMPTE_CARRIERS:
+        rig.setc(f"SOUR:FREQ {hf} HZ", quiet=True)
+        rig.settle()
+        d, n = settled_read(rig, "MDIS")
+        rows.append((f"SMPTE_60_{hf // 1000}k", a.vin, d[0], d[1]))
+        pts.append((hf, d))
+        if n > 2:
+            log(f"   ({hf} Hz: {n} readings before two agreed within {SETTLE_TOL_DB} dB)")
+    rig.setc("SOUR:FREQ 7000 HZ", quiet=True)          # twin()'s cached SMPTE set-up again
+    msg = "   SMPTE vs carrier (60 Hz + f, {:g} V): ".format(a.vin) + ", ".join(
+        f"{hf // 1000}k {fmt(d[0], '%.1f')}/{fmt(d[1], '%.1f')}" for hf, d in pts) + " dB"
+    log(msg)
+    for ch, name in ((0, "L"), (1, "R")):
+        xy = [(math.log2(hf), d[ch]) for hf, d in pts if d[ch] is not None]
+        if len(xy) >= 3:
+            mx = sum(x for x, _ in xy) / len(xy)
+            my = sum(y for _, y in xy) / len(xy)
+            s = (sum((x - mx) * (y - my) for x, y in xy) / sum((x - mx) ** 2 for x, _ in xy))
+            what = ("rises with the carrier: a frequency-dependent (feedback/slew-type) nonlinearity"
+                    if s > 2 else "falls with the carrier: an LF mechanism (coupling cap, core, supply)"
+                    if s < -2 else "flat: a static nonlinearity")
+            log(f"   {name}: {s:+.1f} dB/octave of carrier -- {what}")
     return rows
 
 
@@ -1248,6 +1307,15 @@ def report_test(rep, name, header, rows, a, ctx):
         for (test,), g in _groups(recs, "test").items():
             rep.plot(f"imdlevel_{test}", _lr(g, "vin_V", "L_dB", "R_dB"),
                      title=f"{test} IMD vs input level", xlabel="Input (V rms)", ylabel="IMD (dB)", logx=True)
+        rep.table(header, rows)
+    elif name == "imd":
+        car = [q for q in recs if str(q["test"]).startswith("SMPTE_60_")]
+        if car:
+            for q in car:
+                q["carrier_Hz"] = 1000 * float(str(q["test"]).rsplit("_", 1)[1].rstrip("k"))
+            rep.plot("imd_smpte_carrier", _lr(car, "carrier_Hz", "L_dB", "R_dB"),
+                     title=f"SMPTE IMD vs upper-tone frequency (60 Hz + f, 4:1, {a.vin:g} V)",
+                     xlabel="Upper tone (Hz)", ylabel="IMD (dB)", logx=True, height=3.4)
         rep.table(header, rows)
     elif name == "gainlaw":
         rep.plot("gainlaw", _lr(recs, "set_dB", "track_err_L_dB", "track_err_R_dB"),

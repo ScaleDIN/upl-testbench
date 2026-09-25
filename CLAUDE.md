@@ -205,6 +205,14 @@ low-frequency problem.**
   bass is where it's weakest. The 1 kHz THD figure overstates how clean it is.
 - Seen once: cleanup's `SOUR:FUNC SIN` → `-200` straight after the 12 kHz MDIS point, but the
   generator read back SIN, muted, no error queued. Not reproduced.
+- **Folded into `analog_test.py imd`** (same evening): after SMPTE/CCIF at `--vin`, SMPTE with the
+  upper tone at 2/4/7/12 kHz, least-squares dB/octave and a one-line reading (rising / flat /
+  falling), plotted in the report. **The DCX's SMPTE reading settles:** 6 back-to-back readings at
+  1 V went −69.1 → −70.7, then −72 a minute later, while loopback held −102…−104 → earlier runs'
+  −68…−75 spread was that, not the analyzer. `settled_read()` re-triggers until two readings agree
+  within 0.3 dB (max 10). Two live runs after that: 2k −81.6/−82.1, 4k −76.9/−77.6, 7k −72.6/−73.0,
+  12k −68.7/−69.1 dB (L), slope +5.0/+5.1 (R +5.4) dB/oct — repeatable to < 1 dB. Results:
+  `results/analog/dcx_imd_carrier_*`.
 
 ## Serial retry with a 3-wire null modem, XON/XOFF (2026‑09‑25)
 

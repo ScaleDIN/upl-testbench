@@ -674,7 +674,7 @@ python measurements/analog_test.py --port COM7 --vin 0.5 --set-level --target 2 
 | `thdn` | THD+N and THD vs frequency at `--vin`; then vs input level, in 2 dB steps up to clipping: input and output at **0.1 % and 1 % THD+N** (maximum output, input overload) |
 | `noise` | input terminated by the muted generator (`--zgen`, 10 Ω by default): output noise at 22 kHz, A-weighted, CCIR‑2k (ARM) and 110 kHz; S/N re `--ref-out` (default: the output at `--vin`); **EIN** in dBu and nV/√Hz; hum lines of the idle output |
 | `fft` | spectrum of 1 kHz at `--vin`: harmonic signature, hum |
-| `imd`, `imdlevel` | SMPTE 60 Hz + 7 kHz 4:1 and CCIF 19 + 20 kHz; at `--vin`, and vs input level |
+| `imd`, `imdlevel` | SMPTE 60 Hz + 7 kHz 4:1 and CCIF 19 + 20 kHz; at `--vin`, and vs input level. `imd` also moves SMPTE's upper tone (2/4/7/12 kHz) and reports dB/octave: rising ≈ a nonlinearity that grows with frequency (feedback running out, slew), flat = static, falling = an LF mechanism (coupling cap). Each IMD reading is repeated until two agree within 0.3 dB (the DCX2496 drifts ~2–3 dB over the first ~30 s) |
 | `xtalk` | crosstalk both ways, selective, 100 Hz–20 kHz |
 | `zout` | output impedance (analyzer 200 kΩ vs 600 Ω load) |
 | `zin` | input impedance at 1 and 20 kHz (generator source 10 vs 600 Ω; XLR output only) |
@@ -696,10 +696,9 @@ thdn maxout snr ein imd xtalk zout zin cmrr`). A preamp with a volume control ah
 stage has an input overload that depends on the knob, so `thdn` reports it *at the current
 setting*. Turn it down and rerun to find the input stage's own limit.
 
-**Not yet run live (written 2026‑09‑25).** Verified offline against `--dry-run`, a simulated
-preamp (gain, noise, soft clipping, Zin/Zout; with and without B1 in `*OPT?`) and a simulated DCX
-(gain offset, Butterworth/Linkwitz-Riley filters, limiter). The DAC suite never
-used the UPL's analog generator, so `check` is the first thing to run.
+**First live run 2026‑09‑25: `all` on the DCX2496 (two outputs), clean — no command rejected.**
+Results and the SMPTE follow-up are in `CLAUDE.md` ("First live `analog_test.py all`"). Not yet run
+on a preamp, a phono stage (`--riaa`), without B1, or `--unbal`/`cmrr`/`tracking`.
 
 ### Test-signal files for any DAC or player (`tools/testsignals.py`)
 
