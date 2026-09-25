@@ -67,7 +67,7 @@ reading made `rec()` return no deviation and the `%+.2f` log line raised a TypeE
 command. It used to send `MMEM:DEL` straight after the slow `MMEM:LOAD:STAT`, the pattern that
 makes the PL2303 double a byte. None of this has been run on the instrument yet.
 
-## DAC impulse/step response, `dac_test.py impulse` (2026‑09‑25) — not yet run live
+## DAC impulse/step response, `dac_test.py impulse` (2026‑09‑25) — first live run 22:28, see end
 
 Stimulus: one sample at `--imp-level` (−3 dBFS) every `--period` (10 ms). UPL source = ARB
 time-table file `C:\UPL\USER\IMP<n>.TTF` (uploaded, MD5-checked, like the J-test); PC source =
@@ -86,7 +86,8 @@ any DAC filter; A22's own anti-alias filter would ring in the band being measure
   several samples).
 - A100 measures CH1 then CH2 → no L/R timing; the level trigger → no absolute latency.
 - **Hang risk:** a single WAVEFORM measurement waits for its trigger forever, and `*WAI` blocks the
-  parser, so a missed trigger can't be cancelled remotely → STOP on the panel. Hence not in `all`.
+  parser, so a missed trigger can't be cancelled remotely → STOP on the panel. Hence not in plain
+  `all`; opt in with `all --with-impulse`.
 - 6144 samples (20 ms) = exactly 6 blocks, so a 7th `TRAC?` comes back empty: `read_wave()` treats
   that as the end (`read_fft` raises).
 
@@ -96,6 +97,26 @@ at 20 kHz (analytic +1.36), minimum-phase symmetry 0.08, inversion detected. Unv
 the WAV commands above, `DISP:TRAC:IND` paging a waveform, `TRAC? LIST1` as time in s, whether
 fixed ranges are peak or rms, and sample-exact ARB playback. Obvious first target: the Elektor DAC
 at 96 kHz, where L's suspected under-damped Bessel section should show as longer, larger ringing.
+
+**First live run (2026‑09‑25, 22:28, GPIB, an unidentified DAC, very likely the DCX2496 via AES; `results/dac/mystery_*`): works.** WAV function, trigger,
+`DISP:TRAC:IND` paging (6145 samples, dt 3.260 µs), `TRAC? LIST1` as time all fine; no hang.
+Clean symmetric sinc at every rate (symmetry 1.00, peak ≈ 9.5 V from a −3 dBFS sample). Only
+`SENS:UNIT2 V` is rejected (`-200`, harmless). **Still wrong in the analysis:** step pre-shoot
+100–170 % and, at 88.2k, ringing frequency 90 kHz (L) vs 19 kHz (R) — artifacts, fix before trusting.
+- **Paging needs a sync.** Reading `TRAC? LIST1` only once (it's the same for every capture) made the
+  results garbage: peak 7.5 V, symmetry 0.84/1.23. The per-block `LIST1` query had been giving
+  `DISP:TRAC:IND` time to take effect; without it the next `TRAC?` can return the wrong block. Now
+  `DISP:TRAC:IND n` → `*OPC?` → `TRAC?`, with the axis cached per rate: results identical to the old
+  code. `read_fft` (upl_capture) still works only because it reads `LIST1` per block.
+- **Runtime (profiled, 48k, `--avg 8`):** 66 s per rate over GPIB: 119 `TRAC?` = 1.14 MB ASCII in
+  40 s (~29 kB/s), 16 s of `*OPC?` (trigger waits, TTF upload). Was ~95 s per rate before the
+  cache (2.3 MB). **All four rates: ~4½ min on GPIB, ~9–10 min on RS‑232 at 115 200** (~10 kB/s →
+  ~115 s of data per rate); the old code would have been ~16 min on serial. Time scales with
+  `--avg` and the number of `--fs`.
+- **`all --with-impulse` (same evening):** opt-in, runs `impulse` last at every `--fs` (impulse's
+  options are on `all` too). Kept out of plain `all` for the hang risk rather than the time (a full
+  `all` took ~26 min on GPIB tonight, 22:01–22:27; impulse adds ~4½). Running last means a hang
+  loses nothing already measured; a rate with no output at −6 dBFS is skipped before triggering.
 
 ## Analog DUT suite, `measurements/analog_test.py` (2026‑09‑25) — not yet run live
 

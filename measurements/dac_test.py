@@ -1486,17 +1486,25 @@ WAV_DEPTH = 7488            # WAVEFORM memory depth, samples (Vol.1 2.6.5.14)
 RANGES = (0.018, 0.03, 0.06, 0.1, 0.18, 0.3, 0.6, 1, 1.8, 3, 6, 10, 18, 30, 60, 100)
 
 
-def read_wave(rig, sel):
+def read_wave(rig, sel, xcache=None):
     """A WAVEFORM trace, paged like the FFT (TRAC? returns at most 1024 values;
     DISP:TRAC:IND selects the block). Unlike read_fft, an empty or non-numeric
-    block ends it: 6144 samples (20 ms at 307.2 kHz) is exactly 6 full blocks."""
+    block ends it: 6144 samples (20 ms at 307.2 kHz) is exactly 6 full blocks.
+    xcache (a dict, block -> time axis) keeps each block's TRAC? LIST1 for the next
+    capture: the axis is the same for every capture and both channels at one
+    setting, and reading it again doubled the transfer time."""
     t, y = [], []
     try:
         for blk in range(8):
             rig.w(f"DISP:TRAC:IND {blk}")
+            rig.q("*OPC?")          # without a sync the next TRAC? can return the wrong block
             try:
                 yy = parse_values(rig.q(f"TRAC? {sel}"), sel)
-                xx = parse_values(rig.q("TRAC? LIST1"), "LIST1")
+                xx = xcache.get(blk) if xcache is not None else None
+                if xx is None or len(xx) != len(yy):
+                    xx = parse_values(rig.q("TRAC? LIST1"), "LIST1")
+                    if xcache is not None:
+                        xcache[blk] = xx
             except ValueError:
                 break
             n = min(len(xx), len(yy))
@@ -1641,6 +1649,7 @@ def t_impulse(rig, a, fs, ctx):
     for c in ("FORM ASC", "DISP:TRAC:FEED 'SENS:DATA'", "DISP:TRAC2:FEED 'SENS:DATA2'"):
         rig.setc(c)
     wins = {"L": [], "R": []}
+    xcache = {}                                               # time axis, read once per rate
     dt = 1 / A100_FS
     try:
         for k in range(a.avg):
@@ -1654,7 +1663,7 @@ def t_impulse(rig, a, fs, ctx):
                     "--slope fall; a quiet one a lower --trig-frac.")
             rig.u.set_timeout(a.timeout)
             for ch, sel in (("L", "TRAC1"), ("R", "TRAC2")):
-                tx, y = read_wave(rig, sel)
+                tx, y = read_wave(rig, sel, xcache)
                 if k == 0 and ch == "L" and len(tx) > 2:
                     d = float(np.median(np.diff(tx)))
                     if 1e-4 <= d < 0.1:                       # ms, not s
@@ -2092,6 +2101,21 @@ def run(rig, a, rep, log):
     run_one(rig, a, rep, log, name, a.fs[:1] if name == "setlevel" else a.fs, {})
 
 
+def add_impulse_args(s):
+    """Options of `impulse`, also on `all` (used with --with-impulse)."""
+    s.add_argument("--period", type=float, default=0.01,
+                   help="impulse spacing, s (the analysis window; 10 ms = 100 Hz FFT resolution)")
+    s.add_argument("--imp-level", type=float, default=-3.0,
+                   help="impulse height, dBFS (-3: some DACs' output stages clip near 0 dBFS)")
+    s.add_argument("--avg", type=int, default=8, help="captures averaged per channel")
+    s.add_argument("--trig-frac", type=float, default=0.02,
+                   help="trigger level, fraction of the expected impulse peak")
+    s.add_argument("--slope", choices=("rise", "fall"), default="rise",
+                   help="trigger slope; 'fall' for an inverting DAC with no positive excursion")
+    s.add_argument("--trig-timeout", type=float, default=20.0,
+                   help="seconds to wait for a trigger before giving up")
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--port", help="COMn or GPIB0::20::INSTR (not needed with --dry-run)")
@@ -2138,8 +2162,13 @@ def main():
                    help="setlevel: stop the tone after this many seconds even without Enter")
 
     sub = p.add_subparsers(dest="test", required=True)
-    for name in ("setlevel", "check", "zout", "polarity", "interface", "linearity", "imdlevel", "all"):
+    for name in ("setlevel", "check", "zout", "polarity", "interface", "linearity", "imdlevel"):
         sub.add_parser(name)
+    s = sub.add_parser("all")
+    s.add_argument("--with-impulse", action="store_true",
+                   help="also run `impulse`, last (~1 min per rate on GPIB, ~2 on RS-232; a missed "
+                        "trigger hangs the UPL until STOP is pressed on its panel)")
+    add_impulse_args(s)
     s = sub.add_parser("stability")
     s.add_argument("--readings", type=int, default=20, help="repeated 997 Hz level readings")
     s.add_argument("--monitor", type=float, default=0.0,
@@ -2157,17 +2186,7 @@ def main():
     s = sub.add_parser("filter")
     s.add_argument("--fft-avg", type=int, default=16)
     s = sub.add_parser("impulse", help="impulse/step response (WAVEFORM on the 100 kHz analyzer)")
-    s.add_argument("--period", type=float, default=0.01,
-                   help="impulse spacing, s (the analysis window; 10 ms = 100 Hz FFT resolution)")
-    s.add_argument("--imp-level", type=float, default=-3.0,
-                   help="impulse height, dBFS (-3: some DACs' output stages clip near 0 dBFS)")
-    s.add_argument("--avg", type=int, default=8, help="captures averaged per channel")
-    s.add_argument("--trig-frac", type=float, default=0.02,
-                   help="trigger level, fraction of the expected impulse peak")
-    s.add_argument("--slope", choices=("rise", "fall"), default="rise",
-                   help="trigger slope; 'fall' for an inverting DAC with no positive excursion")
-    s.add_argument("--trig-timeout", type=float, default=20.0,
-                   help="seconds to wait for a trigger before giving up")
+    add_impulse_args(s)
     s = sub.add_parser("fr")
     s.add_argument("--start", type=float, default=10.0)
     s.add_argument("--stop", type=float, help="default 20 kHz (or 0.45*fs with --wide)")
@@ -2208,7 +2227,8 @@ def main():
     defaults = dict(start=10.0, stop=None, points=31, level=None, repeat=2, wide=False,
                     analyzer="A22", freq_level=-1.0, freq=997.0, images=False, image_freq=None,
                     fft_avg=4, imd_fft=False, ui=0.1, jfreqs="100,300,1000,2000,5000,8000", cable=False,
-                    jbits="24,16", mt_level=-1.0, readings=20, monitor=0.0)
+                    jbits="24,16", mt_level=-1.0, readings=20, monitor=0.0, with_impulse=False,
+                    period=0.01, imp_level=-3.0, avg=8, trig_frac=0.02, slope="rise", trig_timeout=20.0)
     for k, v in defaults.items():
         if not hasattr(a, k):
             setattr(a, k, v)
@@ -2312,6 +2332,10 @@ def run_all(rig, a, rep, log):
             rates = [48000] if 48000 in a.fs else a.fs[:1]
         a.level = per_test_level.get(name, a.level)
         run_one(rig, a, rep, log, name, rates, ctx)
+    if a.with_impulse:
+        # last: a missed trigger hangs the UPL (STOP on the panel), so everything else is
+        # already written by then. t_impulse skips a rate with no output at -6 dBFS.
+        run_one(rig, a, rep, log, "impulse", a.fs, ctx)
 
 
 def run_one(rig, a, rep, log, name, rates, ctx):
