@@ -2,12 +2,15 @@
 
 Tools for driving a Rohde & Schwarz UPL audio analyzer from a modern PC over its RS‑232 **or GPIB
 (IEC‑bus)** remote port, pulling data off it, and using it to automatically characterize other
-gear: any DAC, player or audio device through the general test suites, plus extra remote control
-for a Behringer DCX2496 crossover and a NAD M51 DAC. Background,
-firmware analysis, and the full narrative of how everything here was discovered/verified is in
-`CLAUDE.md` — this file is the "how do I actually run things" reference.
+gear: any DAC, player or audio device, through test suites that treat the device as a black box.
+Background, firmware analysis, and the full narrative of how everything here was
+discovered/verified is in `CLAUDE.md` — this file is the "how do I actually run things" reference.
 
-For the UPL's own self-test, see the standalone **[SELFTEST_README.md](SELFTEST_README.md)**.
+Separate guides:
+- **[SELFTEST_README.md](SELFTEST_README.md)**: the UPL's own self-test.
+- **Equipment-specific control** (tests that also drive a particular unit over its own serial
+  port): **[DCX2496_README.md](DCX2496_README.md)** (Behringer DCX2496 crossover),
+  **[M51_README.md](M51_README.md)** (NAD M51 DAC).
 
 **Contents**
 
@@ -19,7 +22,7 @@ For the UPL's own self-test, see the standalone **[SELFTEST_README.md](SELFTEST_
 - [UPL self-test](#upl-self-test)
 - **[Tests for any device](#tests-for-any-device)**: the DAC suite, test-signal files, file and
   test-disc playback, analyzer filter checks, the soundcard suite
-- **[Equipment-specific tests](#equipment-specific-tests)**: NAD M51, Behringer DCX2496
+- [Equipment-specific control](#equipment-specific-control): pointers to the per-device guides
 - Reference: [firmware archive extraction](#firmware-archive-extraction-toolslzh_extractpy),
   [folder layout](#folder-layout), [where things are documented](#where-things-are-documented)
 
@@ -49,8 +52,8 @@ Serial needs no GPIB software: `pyvisa` is only imported when a `GPIB…` name i
 ~10× faster than RS‑232: much quicker file transfers, and more readings per step in
 `upacd_test.py`'s continuous polling. `--baud` is ignored over GPIB. The Keysight suite needed a
 PC reboot before VISA would load. See `CLAUDE.md`, "GPIB (Agilent/Keysight 82357B)", for the
-gotchas, such as never interrupting a GPIB file transfer. Two things are always serial: the **DUT**
-links (`--dcx-port`, `--m51-port`, `--dut-port`: the DCX2496 and M51 only have RS‑232) and
+gotchas, such as never interrupting a GPIB file transfer. Two things are always serial: links to
+a controlled **DUT** (`--dut-port`, `--dcx-port`; see the equipment guides) and
 `tools/sndfile_batch.py` (SNDFILE sends over COM2 by design).
 
 To find the ports: a GPIB resource name comes from
@@ -83,14 +86,14 @@ results/<test>/<label>_<YYYYMMDD-HHMMSS>/
 ```
 
 **`results/index.html`** lists every run, newest first, with its headline result (e.g. "PASS:
-121/121", "Worst THD+N −78.4 dB at 6016 Hz") and a link to its report. It is rebuilt after each run;
+137/137", "Worst THD+N −78.4 dB at 6016 Hz") and a link to its report. It is rebuilt after each run;
 `python report.py` rebuilds it by hand.
 
 Two options, the same on every script:
 
 | Option | Does |
 |---|---|
-| `--label NAME` | names the run folder: the DUT, the cable, the setting (`--label m51_usb_96k`). Each script has a sensible default (`dac`, the DCX output, `selftest`...). |
+| `--label NAME` | names the run folder: the DUT, the cable, the setting (`--label mydac_usb_96k`). Each script has a sensible default (`dac`, `selftest`...). |
 | `--outdir DIR` | puts this run exactly in `DIR` instead |
 
 `-o FILE`, where a script has it, now means "just the CSV, to this file, no results folder"
@@ -109,12 +112,11 @@ The code is `report.py` (`Run`, used as `with Run("mytest", label=...) as rep:` 
 ## Core control libraries
 
 These provide the `import`-able classes the test scripts build on. Each is also a standalone CLI.
+(Drivers for particular DUTs, `dcx2496.py` and `nad_m51.py`, are covered in their own guides.)
 
 | File | What it talks to | Protocol |
 |---|---|---|
 | `upl_capture.py` | R&S UPL, RS‑232 or GPIB remote | SCPI. RS‑232: LF-terminated, 115200 8N1 RTS/CTS; GPIB: VISA, address 20 |
-| `dcx2496.py` | Behringer DCX2496, RS232 | MIDI-SysEx-style, 38400 8N1 (unofficial, reverse-engineered — see `dcx2496_protocol.md`) |
-| `nad_m51.py` | NAD M51 DAC, RS232 | ASCII `Var=Value`/`Var?`, 115200 8N1, no flow control |
 | `ser_in.py` | receives a file the UPL pushes via its `SNDFILE.BAS` macro (superseded by `getfile` / `tools/upl_backup.py`) | raw bytes, 115200, idle-timeout framing |
 
 Quick examples:
@@ -135,19 +137,9 @@ python upl_capture.py --port COM7 getfile "C:\UPL\FR.EXP" -o FR.EXP
 
 # UPL: full FFT spectrum, paging past the 1024-line limit
 python upl_capture.py --port COM7 fft --size 8192
-
-# DCX2496: enable remote, nudge a gain, set a crossover point
-python dcx2496.py --port COM2 enable
-python dcx2496.py --port COM2 gain out1 -6.0
-python dcx2496.py --port COM2 xover out1 500 --type lr24
-
-# NAD M51: query/set volume and source
-python nad_m51.py --port COM2 volume
-python nad_m51.py --port COM2 volume -3
-python nad_m51.py --port COM2 source
 ```
 
-`upl_capture.py --help`, `dcx2496.py --help`, `nad_m51.py --help` list every subcommand.
+`upl_capture.py --help` lists every subcommand.
 
 ### Working offline (`--dry-run`)
 
@@ -167,7 +159,7 @@ programs document (right commands, right order, `SWE1` not `SWE2`, `FORM ASC` no
 
 `nsweep` hands the whole sweep to the UPL's internal sweep engine (`SOUR:SWE:MODE AUTO` +
 `SOUR:FREQ:MODE SWE1`, one `INIT:CONT OFF;*WAI`, then `TRAC? TRAC1` / `TRAC? LIST1`) instead of
-stepping `SOUR:FREQ` from the host in a loop the way `dcx_sweep.py` does. Far fewer round trips —
+stepping `SOUR:FREQ` from the host in a loop. Far fewer round trips —
 a 40-point sweep runs in ~11 s inside the instrument.
 
 **Verified live 2026‑09‑23** (internal loopback, flat to ±0.05 % from 20 Hz to 20 kHz). The two
@@ -192,8 +184,8 @@ python upl_capture.py --port COM7 --label zoom10k fft --zoom 8 --center 10000
 python upl_capture.py --port COM7 fft --size 8192 -o -      # just the CSV, on screen
 ```
 
-This is what the "FFT zoom quirk" in the old `m51_jitter_fft.py` turned out to be — zoom was never broken,
-the readout was returning the wrong eighth of it. `CLAUDE.md`'s "FFT zoom quirk RESOLVED" section
+This is what an earlier "FFT zoom quirk" turned out to be — zoom was never broken, the readout
+was returning the wrong eighth of it. `CLAUDE.md`'s "FFT zoom quirk RESOLVED" section
 has the full arithmetic. Note that over the bus you set the zoom **factor**, never the SPAN
 (`CALC:TRAN:FREQ:SPAN?` is query-only).
 
@@ -289,8 +281,7 @@ See **[SELFTEST_README.md](SELFTEST_README.md)** — `upl_selftest.py`, fully do
 
 These work on any DUT: the device is whatever sits between the signal source and the UPL's
 analyzer input, and nothing here assumes a particular make. Start with these; the
-[equipment-specific tests](#equipment-specific-tests) further down only add control of a
-particular unit.
+[equipment-specific guides](#equipment-specific-control) only add control of a particular unit.
 
 ### DAC characterization (`measurements/dac_test.py`)
 
@@ -302,28 +293,30 @@ comes from; every measurement and diagnosis is shared, so results are comparable
   digital generator (B29)** is the source. It's bit-exact, the UPL sets the sample rate, and
   the interface can be degraded on purpose (jitter via B22, 100 m cable simulator, low signal
   voltage, off-nominal sample rate, 16/20/24-bit words).
-- **`--source pc --device N`**, for a USB DAC (NAD M51, Sony NW‑A306 in USB‑DAC mode, the
-  laptop's own output…): **this PC synthesizes each tone** and plays it through WASAPI exclusive
+- **`--source pc --device N`**, for a USB DAC (a desktop DAC, a portable player in USB‑DAC mode,
+  the laptop's own output…): **this PC synthesizes each tone** and plays it through WASAPI exclusive
   mode as exact integer samples with dither off, so it's bit-exact at the USB input too. Any
   sample rate the device accepts works (e.g. 192000). The UPL can't GENTrack a PC, so selective
   measurements use a FIXed bandpass that follows each tone. `jitter`, `interface` and `polarity`
   need the UPL generator and are skipped. Give it more `--settle` (~0.5 s): a new tone only
   arrives after the audio buffer and the DAC's own latency.
 
-A player that can only play files itself (the NW‑A306's own playback) can't be driven this way;
+A player that can only play files itself (a DAP's own playback) can't be driven this way;
 use `tools/testsignals.py` + `upacd_test.py --external` for that.
 
-Most DACs need no control: set them up by hand and the suite treats them as a black box.
-**`--dut m51`** (the only one so far) logs the DUT's source and volume in the report, sets
-`--volume` for the run and restores it, and enables **`volsweep`** (THD+N/THD/level vs the DUT's
-volume). Adding another DUT means one small class in `dac_test.py`'s `DUTS`.
+Most DACs need no control: set them up by hand and the suite treats them as a black box. For a
+DAC with a remote-control driver, **`--dut NAME --dut-port COMn`** logs its source and volume in
+the report, sets `--volume` for the run and restores it, and enables **`volsweep`** (THD+N/THD/
+level vs the DUT's volume). Supported so far: `m51` ([M51_README.md](M51_README.md)). Adding
+another DUT means one small class in `dac_test.py`'s `DUTS`.
 
 Physical setup: UPL digital out → DAC input. For a coax (S/PDIF) input use the UPL's **UNBAL BNC
 output directly** — it is already a transformer-coupled 75 Ω source (Service Manual Vol.2 p.247:
 CLC430 driver → 1:1 transformer T2 → 150‖150 Ω = 75 Ω → BNC; Vol.1 p.2.74: level set as Vpp
 into 75 Ω, 0–2.125 V), so no 110→75 Ω transformer is needed. BNC→RCA adapter +
 75 Ω coax. Use BAL XLR (110 Ω) for AES3 inputs, TOSLINK for optical. DAC L/R analog out → UPL analyzer inputs 1/2. RCA outputs go into the XLR inputs
-via adapters; the script uses `INP:LOW FLOat` (see the DCX balanced/single-ended test for why),
+via adapters; the script uses `INP:LOW FLOat` (grounding the input's low side added measurable
+noise with single-ended sources, see `CLAUDE.md` "Balanced vs single-ended comparison"),
 `--ground` to change it.
 
 ```bash
@@ -335,7 +328,7 @@ python measurements/dac_test.py --port COM7 --label mydac all  # the lot -- tens
 
 # USB DAC: the PC is the source (find N with `python measurements/upacd_test.py devices`)
 python measurements/dac_test.py --port COM7 --source pc --device 16 --fs 44100,96000,192000 \
-    --settle 0.6 --label m51_usb all
+    --settle 0.6 --label mydac_usb all
 ```
 
 | Test | What it answers |
@@ -372,10 +365,15 @@ analyzer somewhat, so it's switched on only for those rates and back to `BRM` at
 goes to `results/dac/<label>_<timestamp>/` (git-ignored): `report.html` with a graph for each
 test (frequency response L/R selective and broadband, L−R per pass, THD+N and THD vs level and
 frequency, spectra, crosstalk, jitter sidebands, linearity...), a CSV per test, and
-`summary.txt`. **Not yet run against hardware** — every config command is error-checked, and a
-list of anything the UPL rejected is printed at the end, so the first live `check` shows what
-needs fixing. The refactor was checked offline: `--source upl` sends the same SCPI as the old
-`spdif_dac_test.py` plus a few redundant resets, and gives identical CSVs in `--dry-run`.
+`summary.txt`. Every config command is error-checked, and anything the UPL rejected is listed at
+the end of the run.
+
+**Run live with `--source upl` (2026‑09‑24/25):** every test in the table above, on two DACs
+over optical at 44.1–96 kHz (results under `results/dac/`). The UPL quirks found on the way are
+handled in the script (see `CLAUDE.md`). One to know about: THD+N of a clipping 0 dBFS tone
+leaves the analyzer's THD+N floor ~6 dB worse until a native RMS sweep or a power cycle, so
+`thdn` clears it itself; if THD+N readings elsewhere look ~6 dB high, that's the cause.
+**Not yet run live:** `--source pc` (USB DACs), `--dut` / `--volume`, and `volsweep`.
 
 ### Test-signal files for any DAC or player (`tools/testsignals.py`)
 
@@ -408,11 +406,11 @@ Dithered files use ±1 LSB TPDF; 14–16 are undithered on purpose. **Several fi
 sidecar), or with `--external` just listens while a player plays the file itself:
 
 ```bash
-# PC plays into a DAC (M51, Elektor, NW-A306 in USB-DAC mode...)
-python measurements/upacd_test.py --upl-port COM7 --device 16 --exclusive --label m51_96k \
+# PC plays into a DAC (any USB DAC, a player in USB-DAC mode...)
+python measurements/upacd_test.py --upl-port COM7 --device 16 --exclusive --label mydac_96k \
     --wav testsignals/96k_24/11_level_staircase.wav linearity
-# the DUT plays the copied file itself (NW-A306 file playback): press play when told
-python measurements/upacd_test.py --upl-port COM7 --external --label a306_96k \
+# the DUT plays the copied file itself (a DAP's own playback): press play when told
+python measurements/upacd_test.py --upl-port COM7 --external --label dap_96k \
     --wav testsignals/96k_24/10_third_octaves_-6dBFS.wav segments
 ```
 
@@ -425,16 +423,16 @@ a planted 0.5 dB error at −100 dBFS came back out, and −120 dBFS read the co
 ### UPA-CD test-disc playback (`measurements/upacd_test.py`)
 
 Plays R&S Audio Test Disc tracks from this PC into any DUT while the UPL measures. The DUT is
-whatever sits between the sound device and the UPL's analyzer input, so the same script covers the
-M51, the DCX2496, or **this laptop's own output** — just point `--device` at a different output and
-`--label` the run:
+whatever sits between the sound device and the UPL's analyzer input, so the same script covers a
+USB DAC, a DAC or processor further down the chain, or **this laptop's own output** — just point
+`--device` at a different output and `--label` the run:
 
 ```bash
 python measurements/upacd_test.py devices                       # find the output index
 
-# NAD M51 over USB
+# a USB DAC
 python measurements/upacd_test.py --upl-port COM7 --device 16 --exclusive \
-    --label m51_44k linearity
+    --label mydac_44k linearity
 
 # the laptop's own headphone/line output (needs a 3.5mm -> XLR adapter into the UPL)
 python measurements/upacd_test.py --upl-port COM7 --device 5 --exclusive \
@@ -502,100 +500,19 @@ python audio_tests.py loopback --freq 1000 --level -6   # PLAYS a tone and recor
 python audio_tests.py response --label laptop          # PLAYS a stepped-sine sweep
 ```
 
-## Equipment-specific tests
+## Equipment-specific control
 
-Tests that also *control* a particular unit over its own serial port. For the measurements
-themselves, prefer the general suite above; these sections cover what only that unit's remote
-control adds.
+Tests that also *control* a particular unit over its own serial port have their own guides. For
+the measurements themselves, prefer the general suites above; these cover only what that unit's
+remote control adds.
 
-### NAD M51 DAC characterization
+| Guide | Unit | Adds |
+|---|---|---|
+| [DCX2496_README.md](DCX2496_README.md) | Behringer DCX2496 crossover | `dcx2496.py` driver; crossover/EQ/gain set by the PC and measured by the UPL (`dcx_sweep.py`, `measurements/dcx_*.py`) |
+| [M51_README.md](M51_README.md) | NAD M51 DAC | `nad_m51.py` driver; `dac_test.py --dut m51` (volume set/restore, `volsweep`) |
 
-The M51 is tested with the general DAC suite, [`dac_test.py`](#dac-characterization-measurementsdac_testpy):
-laptop → USB → M51 → balanced out → UPL analyzer, with `--source pc`. `nad_m51.py` (RS‑232, COM2,
-115200, no handshake) is the only M51-specific code left; `dac_test.py --dut m51` uses it.
-
-- **Fixed-output mode** (the M51's own setting): the M51 is a plain DAC to the suite. Run it like any
-  other; add `--dut m51` only if you want its source and volume logged in the report.
-- **Variable output:** `--dut m51 --volume 0` sets the volume for the run and restores it at the end.
-- **`volsweep`**: THD+N/THD/level vs the M51's own volume, to find the best setting to leave it at
-  when something downstream does the level control.
-
-```bash
-python measurements/dac_test.py --port COM7 --source pc --device 16 --fs 44100,96000,192000 \
-    --settle 0.6 --label m51 all                                  # fixed-output mode
-python measurements/dac_test.py --port COM7 --source pc --device 16 --fs 96000 \
-    --dut m51 --volume 0 --label m51_0dB all                       # variable, run at 0 dB
-python measurements/dac_test.py --port COM7 --source pc --device 16 --fs 48000 \
-    --dut m51 volsweep --volumes -20,-10,-6,-3,0,3,6,10
-```
-
-The M51's S/PDIF, optical and AES inputs can be tested with `--source upl` instead, fed from the
-UPL's digital output. `--dut m51` works the same with either source.
-
-The five `measurements/m51_*.py` scripts were retired on 2026‑09‑24: frequency response → `fr` +
-`thdn`, IMD → `imd` + `imdlevel`, FFT sidebands → `jtest` + `fft`, gain sweep → `volsweep`, and
-the frequency-counter jitter proxy → `jtest`, the proper test. They're in git history (`aa6dfa1`)
-if ever needed.
-
-### DCX2496 crossover/EQ characterization
-
-Physical setup for all of the DCX2496 tests below: **UPL generator output → DCX2496 input A**;
-**DCX2496 output N → UPL analyzer input** (both XLR balanced). This makes the UPL both the
-generator and the analyzer, with the DCX2496 as the device under test in between.
-
-**`dcx_sweep.py`** — the general-purpose permanent tool. Sets a DCX2496 crossover (and/or gain),
-runs a UPL level-vs-frequency sweep, saves CSV and a graph. Handles one curve or a family of curves (e.g.
-several highpass cutoffs) in one run.
-
-```bash
-# one highpass curve, cutoff isolated (lowpass disabled)
-python dcx_sweep.py --dcx-port COM2 --upl-port COM7 --out-ch out1 \
-    --hp-freq 500 --hp-type lr24 --lp-type off --label hp500_lr24
-
-# a family of cutoffs in one run (one CSV column and one curve per cutoff)
-python dcx_sweep.py --dcx-port COM2 --upl-port COM7 --out-ch out1 \
-    --hp-freq 100,300,1000,3000 --hp-type lr24 --lp-type off --label hp_family
-
-# just re-measure whatever the DCX is currently configured to, no writes at all
-python dcx_sweep.py --dcx-port COM2 --upl-port COM7 --out-ch out1 --no-configure --label asis
-```
-
-**Before trusting a result**, `dcx_sweep.py` prints a warning if the UPL looks like it's in an
-unexpected instrument state (`INST?`/`INST2?`/`INP:TYPE?`) — a flat, implausible result across
-the whole sweep usually means the UPL got left in a leftover digital-instrument state from a
-previous test (fix: `*RST`), and an all-noise-floor result with no frequency lock usually means
-the DCX2496 output is muted (fix: `dcx2496.py --port COM2 mute out1 off`). Both were real bugs
-hit during development — see `CLAUDE.md`, "FIRST REAL AUTOMATED CROSSOVER MEASUREMENT."
-
-**`measurements/` DCX2496 tests** — more specific characterizations, each a standalone script:
-
-```bash
-# THD+N vs frequency and vs level, flat passthrough
-python measurements/dcx_thdn.py --dcx-port COM2 --upl-port COM7
-
-# separates THD+N into pure THD (harmonics) vs noise contribution, vs frequency --
-# use this instead of dcx_thdn.py if you want to know whether a bad number is really
-# distortion or just the DCX's noise floor (see CLAUDE.md for what this revealed)
-python measurements/dcx_thd_vs_thdn.py --dcx-port COM2 --upl-port COM7
-
-# gain accuracy (+/-15dB), filter-type comparison (Butterworth/Bessel/Linkwitz-Riley
-# at several orders), and limiter behavior, all in one run
-python measurements/dcx_gauntlet.py --dcx-port COM2 --upl-port COM7
-
-# balanced (XLR direct) vs single-ended (via XLR-to-RCA-to-XLR adapters) comparison --
-# run once per physical wiring state with a different mode label; --compare puts the
-# earlier run beside this one in the report
-python measurements/dcx_balanced_test.py balanced     --dcx-port COM2 --upl-port COM7
-python measurements/dcx_balanced_test.py single_ended --dcx-port COM2 --upl-port COM7 \
-    --compare results/dcx_balanced_test/balanced_<timestamp>
-```
-
-Each DCX script's run folder is named after the output channel (`out1_<timestamp>`) unless you
-give `--label`.
-
-`dcx_balanced_test.py` warns inline if a run's level is near the noise floor with THD+N near
-0dB — that pattern means the signal isn't actually reaching the analyzer (check the physical
-adapter chain), not a real balanced/unbalanced difference.
+To add a unit: a driver module at the top level, a class in `dac_test.py`'s `DUTS` if it's a DAC
+with a volume control, and a `<UNIT>_README.md` here.
 
 ## Firmware archive extraction (`tools/lzh_extract.py`)
 
@@ -615,7 +532,7 @@ for when that isn't available or you want a single member on stdout.)
 
 | Folder | Contents |
 |---|---|
-| top level | core control libraries (`upl_capture.py`, `dcx2496.py`, `nad_m51.py`, `ser_in.py`), `report.py` (results folders + reports), `dcx_sweep.py`, `upl_selftest.py`, `audio_tests.py` |
+| top level | UPL control (`upl_capture.py`, `ser_in.py`), `report.py` (results folders + reports), `upl_selftest.py`, `audio_tests.py`; DUT drivers and their tools (`dcx2496.py`, `dcx_sweep.py`, `nad_m51.py`, see the equipment guides) |
 | `measurements/` | characterization scripts: each drives the UPL (and usually a DUT) through one test and writes a results folder |
 | `tools/` | utilities: disk/file backup, SNDFILE batch transfer, LZH extraction, test-signal generator |
 | `testsignals/` | generated test WAVs, **git-ignored** — rebuild with `tools/testsignals.py` |
@@ -627,8 +544,9 @@ for when that isn't available or you want a single member on stdout.)
   confirmed and how, every bug hit and its fix, every measurement result with its reference
   numbers, and the reasoning behind every tool's design. The authoritative source if this README
   and the code ever disagree.
-- **`dcx2496_protocol.md`** — the DCX2496's full reverse-engineered serial protocol, verbatim.
 - **`SELFTEST_README.md`** — standalone guide for `upl_selftest.py`.
+- **`DCX2496_README.md`**, **`M51_README.md`** — per-device guides for units the PC also controls.
+- **`dcx2496_protocol.md`** — the DCX2496's full reverse-engineered serial protocol, verbatim.
 - **`Application Notes/`, the two operating manual PDFs, and the R&S brochure/spec sheet** (one
   directory up) — original R&S documentation; `CLAUDE.md` has a topic-by-topic catalog of what's
   in the Application Notes folder specifically.
