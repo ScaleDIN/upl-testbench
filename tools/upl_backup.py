@@ -115,6 +115,9 @@ def _fetch_serial(u, path, probe_timeout, read_timeout):
     # whatever the file size (live 2026-09-24). `getfile`, which never changes
     # it mid-stream, was clean. 5 s covers both a missing file (no reply at
     # all) and a stall: data flows continuously at ~10 kB/s.
+    if u.xonxoff:
+        raise SystemExit("upl_backup: binary transfers are unsafe under XON/XOFF "
+                         "(',xon' port); use RTS/CTS or GPIB")
     s = u.ser
     u.set_timeout(max(probe_timeout, 5.0))
     try:

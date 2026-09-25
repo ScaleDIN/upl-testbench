@@ -50,15 +50,19 @@ except ImportError:
 
 
 class UPL:
-    def __init__(self, port, baud=115200, timeout=10.0):
-        # 8 data bits, no parity, 1 stop, hardware RTS/CTS handshake -- per RS232_BT.BAS
+    def __init__(self, port, baud=115200, timeout=10.0, xonxoff=False):
+        # 8 data bits, no parity, 1 stop, hardware RTS/CTS handshake -- per RS232_BT.BAS.
+        # xonxoff: for a 3-wire null modem (no RTS/CTS), with the UPL's OPTIONS panel
+        # COM2 Handshake set to XON/XOFF to match. Text SCPI only (see read_block).
+        self.xonxoff = xonxoff
         self.ser = serial.Serial(
             port=port,
             baudrate=baud,
             bytesize=serial.EIGHTBITS,
             parity=serial.PARITY_NONE,
             stopbits=serial.STOPBITS_ONE,
-            rtscts=True,
+            rtscts=not xonxoff,
+            xonxoff=xonxoff,
             timeout=timeout,
         )
         time.sleep(0.1)
@@ -87,6 +91,10 @@ class UPL:
 
     def read_block(self, cmd):
         """Query returning 488.2 definite-length block  #<n><len><bytes>  (MMEM:DATA?)."""
+        if self.xonxoff:
+            # 0x11/0x13 in the data would be taken as flow control (Vol.2 sec 3.17.6)
+            raise RuntimeError("binary block transfer refused under XON/XOFF; "
+                               "use RTS/CTS (a full null modem) or GPIB")
         self.write(cmd)
         if self.ser.read(1) != b"#":
             raise ValueError("expected '#' at start of block reply")
@@ -208,10 +216,15 @@ class UPLGPIB:
 
 def connect(port, baud=115200, timeout=10.0):
     """UPL over RS-232 for 'COMn' / '/dev/tty*', over GPIB for a VISA resource
-    name ('GPIB0::20::INSTR'), so every tool takes either via --port."""
+    name ('GPIB0::20::INSTR'), so every tool takes either via --port.
+    'COMn,xon' = XON/XOFF instead of RTS/CTS, for a 3-wire null modem; the UPL's
+    COM2 Handshake must be set to XON/XOFF too. Binary file transfers are refused."""
     if port.upper().startswith("GPIB"):
         return UPLGPIB(port, timeout)
-    return UPL(port, baud, timeout)
+    port, _, opt = port.partition(",")
+    if opt and opt.lower() != "xon":
+        raise ValueError(f"unknown port option {opt!r} (only ',xon')")
+    return UPL(port, baud, timeout, xonxoff=bool(opt))
 
 
 class DryRunUPL:

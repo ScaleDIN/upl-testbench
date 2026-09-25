@@ -105,6 +105,43 @@ and disable "allow the computer to turn off this device" under that device's and
 Hub's Power Management in Device Manager. See `CLAUDE.md`'s "Current live wiring" section for the
 full troubleshooting history.
 
+### Serial cable: use a null modem with all the handshake lines
+
+The UPL's COM2 uses **RTS/CTS hardware handshake** by default, and it only sends a reply while
+its CTS input is TRUE. So the cable needs the handshake lines, not just TX/RX/ground. The right
+cable is a full **null modem** (R&S order no. 1050.0346, 2 × DB9 female; Vol.2 §3.17.1, Fig. 3‑18):
+
+| UPL COM2 pin | | PC pin (DB9) |
+|---|---|---|
+| 2 RxD | ↔ | 3 TxD |
+| 3 TxD | ↔ | 2 RxD |
+| 5 GND | ↔ | 5 GND |
+| 7 RTS | ↔ | 8 CTS |
+| 8 CTS | ↔ | 7 RTS |
+| 4 DTR | ↔ | 6 DSR (+ 1 DCD) |
+| 6 DSR | ↔ | 4 DTR (+ 1 DCD) |
+
+A shop "null modem cable" is usually wired like this. A **null modem adapter** or a cheap
+3-wire cable often isn't. Check with a meter: **7↔8 crossed** is the pair that matters. The
+USB-serial adapter must bring out real RTS/CTS too (most do; FTDI is the more reliable chipset,
+see below).
+
+**Symptoms of a cable without handshake lines:** the UPL goes into REMOTE (it *receives*) but
+never answers, not even `*IDN?`, and the tools time out. On the PC, CTS, DSR and CD all read
+False:
+
+```bash
+python -c "import serial; s=serial.Serial('COM2'); print('CTS',s.cts,'DSR',s.dsr,'CD',s.cd)"
+```
+
+With a full null modem and the UPL on, at least CTS and DSR read True. All False with a good
+cable means a connector isn't seated: screw both ends in.
+
+**Workaround if only a 3-wire cable is available:** set the UPL's OPTIONS → COM2 → Handshake
+to **XON/XOFF** and add `,xon` to the port: `--port COM2,xon`. Text SCPI then works in every tool.
+Binary file pulls (`getfile`, `tools/upl_backup.py`) are refused, because XON/XOFF corrupts
+binary data (Vol.2 §3.17.6). Set the handshake back to RTS/CTS when the proper cable goes back in.
+
 ## Where results go
 
 Every measurement script writes **one folder per run**, never into the folder you ran it from:

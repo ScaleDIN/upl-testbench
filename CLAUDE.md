@@ -154,6 +154,32 @@ reads ~1 dB/oct short; the 2026‑09‑23 live LR24 octave gave 24.6); limiter k
 exact −1 dB point. Differences from the old scripts: default `--vin` 0.5 V (use `--vin 1` to compare
 with 2026‑09‑23), sweeps on the UPL's native engine instead of host-stepped, B1 only if fitted.
 
+## Serial retry with a 3-wire null modem, XON/XOFF (2026‑09‑25)
+
+User swapped null modem to retry the old serial failures. Same Prolific adapter (COM2; the only
+port present). **The new cable has no handshake lines:** PC saw CTS/DSR/CD all False; the UPL went
+into REMOTE (so it received) but never replied, as it waits for CTS with RTS/CTS selected (Vol.2
+§3.17.1). Switched the panel to **Handshake XON/XOFF**, PC `xonxoff=True`: link works.
+- Slow compound `SOUR:SWE:MODE AUTO;:SOUR:FREQ:MODE SWE1` + a second command, no `*OPC?`: **5/5
+  clean** (was `-113` FREQQ/MOODE every run over RTS/CTS). `MMEM:LOAD:STAT 2` then `MMEM:DEL`
+  back to back: clean. State snapshot/restore as usual; scratch `.SCO` confirmed deleted (`-200`).
+- **But the doubling happened once anyway:** the next command after the load+delete arrived as
+  `MMEM:CCHECK?` (`-113`). So it isn't CTS-specific: most likely the PL2303 repeats a byte after
+  *any* flow-control pause (XOFF now, CTS before). Points at the adapter, not the cable. One
+  occurrence, so a strong hint, not proof. Prefer the FTDI.
+- Binary pull (`MMEM:DATA?`, the old one-byte-short timeout test) **not run**: Vol.2 §3.17.6 says
+  XON/XOFF must not be used for binary data (0x11/0x13 in the payload).
+- **Added `--port COMn,xon`** (parsed in `upl_capture.connect()`, so every tool gets it):
+  XON/XOFF instead of RTS/CTS. `UPL.read_block()` and `upl_backup.py` refuse binary transfers in
+  that mode. Verified live: `probe` works, `getfile` refused.
+- Next: user goes back to the full-handshake cable, then the 82357B GPIB adapter.
+- **Cable rule, written up in README "Serial cable":** use a full null modem (R&S 1050.0346,
+  Vol.2 Fig. 3‑18): 2↔3, 3↔2, 5↔5, **7 RTS↔8 CTS crossed**, 4 DTR↔6 DSR (+1 DCD). The UPL
+  only transmits while its CTS is TRUE, so a 3-wire cable = REMOTE on, no replies. Quick PC-side
+  check: CTS/DSR True with a good cable; all False = 3-wire or not seated. XON/XOFF (`,xon`) is
+  a text-only fallback. The handshake setting is an OPTIONS-panel item: *RST doesn't touch it,
+  a Backspace boot resets it to RTS/CTS.
+
 ## Digital-audio loop failure, 2026‑09‑24 (evening) — cleared by a power cycle, not a setting
 
 **First live run of the updated selftest** (`upl_selftest.py --port COM2 --preserve`, report in
