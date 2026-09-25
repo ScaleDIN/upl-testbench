@@ -19,6 +19,9 @@ For a player that can only play files itself (the NW-A306's own playback), use
 tools/testsignals.py + measurements/upacd_test.py --external instead.
 
 Tests (subcommands), in the order worth running them:
+  setlevel   guided, for a DUT with a manual volume knob: plays 0 dBFS and shows
+             volts and THD live while you turn it, toward --target V or to the
+             loudest setting before clipping. --set-level runs it before any test
   check      lock at each sample rate, full-scale output level, L/R balance, DC offset
   fr         frequency response, both channels, broadband RMS *and* selective RMS,
              repeated -- separates "the DAC's response is odd" from "the measurement
@@ -47,7 +50,7 @@ Tests (subcommands), in the order worth running them:
   all        everything above, sensible defaults
 
 Comparing with ASR: set the DAC to 2 V (unbalanced) / 4 V (balanced) at 0 dBFS if it
-has a volume control; ASR's SINAD = -(THD+N at 0 dBFS), printed by `thdn`. This
+has a volume control (--set-level --target 2); ASR's SINAD = -(THD+N at 0 dBFS), printed by `thdn`. This
 UPL's own THD+N floor is roughly -103 to -106 dB (loopback), well above an
 APx555's, so SINAD figures beyond ~100 dB are the UPL's floor, not the DAC's.
 
@@ -205,6 +208,7 @@ TITLES = {
     "jitter": "Jitter transfer", "interface": "Interface robustness", "jtest": "J-test",
     "multitone": "Multitone", "linearity": "Linearity", "imdlevel": "IMD vs level",
     "filter": "Reconstruction filter (white noise)", "volsweep": "DUT volume sweep",
+    "setlevel": "Output level set by hand",
 }
 
 
@@ -1630,7 +1634,70 @@ def t_volsweep(rig, a, fs, ctx):
     return rows
 
 
+CLIP_JUMP_DB = 10.0     # setlevel: THD this far above the best seen = clipping
+
+
+def t_setlevel(rig, a, fs, ctx):
+    """Guided level setting for a DUT with a manual volume control: plays 997 Hz at
+    0 dBFS and shows L/R volts and THD about once a second while the user turns
+    the knob, until Enter. With --target it says which way to turn; without one it
+    flags clipping, so the loudest clean setting can be found. THD, not THD+N: THD+N
+    of a clipping 0 dBFS tone latches the analyzer's THD+N floor (see Rig.unlatch).
+    Then asks what the device's volume reads, for the report."""
+    import threading
+    log = rig.log
+    rig.configure(fs)
+    log("   Plays 997 Hz at 0 dBFS until you press Enter: NOTHING but the UPL on the outputs")
+    log("   (no headphones, no amplifier).")
+    if a.target:
+        log(f"   Turn the volume until both channels read {a.target:g} V (within 0.1 dB).")
+    else:
+        log("   Turn the volume up until THD jumps (clipping), then back down until it's gone:")
+        log("   that's the loudest clean setting. Or give --target V for a fixed output level.")
+    if not a.dry_run:
+        input("   Press Enter to start the tone... ")
+    rig.tone(997, 0.0)
+    time.sleep(a.settle)
+    done = threading.Event()
+    if not a.dry_run:
+        threading.Thread(target=lambda: (input(), done.set()), daemon=True).start()
+        log("   Adjust now; press Enter when done.")
+    best, last, n, t0 = None, None, 0, time.time()
+    while not done.is_set() and time.time() - t0 < a.max_time and not (a.dry_run and n >= 3):
+        n += 1
+        (v1, _), (v2, _) = rig.measure("RMS")
+        (h1, hu1), (h2, hu2) = rig.measure("THD")
+        t1, t2 = ratio_db(h1, hu1), ratio_db(h2, hu2)
+        worst = max((t for t in (t1, t2) if t is not None), default=None)
+        if worst is not None:
+            best = worst if best is None else min(best, worst)
+        line = f"   L {fmt(v1, '%.4f')} V  R {fmt(v2, '%.4f')} V   THD L {fmt(t1, '%.1f')} R {fmt(t2, '%.1f')} dB"
+        if a.target and v1 and v2:
+            off = db(math.sqrt(v1 * v2), a.target)           # geometric mean of L and R
+            line += f"   {off:+.2f} dB vs target -> " + (
+                "OK" if abs(off) <= 0.1 else "turn DOWN" if off > 0 else "turn UP")
+        if worst is not None and best is not None and worst > best + CLIP_JUMP_DB:
+            line += "   <- CLIPPING? back off"
+        print(line, flush=True)
+        last = (v1, v2, t1, t2)
+    if time.time() - t0 >= a.max_time:
+        log(f"   (stopped after --max-time {a.max_time:g} s)")
+    setting = ""
+    if done.is_set():                          # not after --max-time: that input() is still waiting
+        setting = input("   What does the device's volume read? (for the report; Enter to skip) ").strip()
+    rig.level_setting = setting
+    if last is None:
+        return []
+    v1, v2, t1, t2 = last
+    log(f"   level set: 0 dBFS -> L {fmt(v1, '%.4f')} V  R {fmt(v2, '%.4f')} V, "
+        f"THD L {fmt(t1, '%.1f')} R {fmt(t2, '%.1f')} dB" + (f", volume '{setting}'" if setting else ""))
+    ctx.setdefault("fullscale", {})[fs] = (v1, v2)
+    return [(fs, a.target or "", setting, v1, v2, t1, t2)]
+
+
 TESTS = {
+    "setlevel":  (t_setlevel, ["fs", "target_V", "volume_setting", "L_V_0dBFS", "R_V_0dBFS",
+                               "THD_L_dB", "THD_R_dB"]),
     "check":     (t_check, ["fs", "locked", "meas_freq_Hz", "fullscale_L_V", "fullscale_R_V",
                             "LminusR_dB", "dc_L_V", "dc_R_V"]),
     "fr":        (t_fr, ["fs", "analyzer", "pass", "mode", "freq_Hz", "L_V", "R_V",
@@ -1676,15 +1743,7 @@ def run(rig, a, rep, log):
     if name == "volsweep" and rig.dut is None:
         log("\n=== volsweep: needs --dut (a DUT whose volume this script can set); skipped ===")
         return
-    fn, header = TESTS[name]
-    ctx, rows = {}, []
-    try:
-        for fs in a.fs:
-            log(f"\n=== {name} @ {fs} Hz ===")
-            rows += fn(rig, a, fs, ctx)
-    finally:                                   # a failed rate keeps the earlier ones
-        rep.csv(f"{name}.csv", header, rows)
-        report_test(rep, name, header, rows)
+    run_one(rig, a, rep, log, name, a.fs[:1] if name == "setlevel" else a.fs, {})
 
 
 def main():
@@ -1724,9 +1783,16 @@ def main():
                    help="JSON file of the DUT's published figures to print next to each result; "
                         "a bare NAME means measurements/dut_specs/NAME.json")
     p.add_argument("--state-file", default="C:\\UPL\\USER\\UPLTMP.SCO")
+    p.add_argument("--set-level", action="store_true",
+                   help="run the guided `setlevel` step first (DUT with a manual volume control)")
+    p.add_argument("--target", type=float,
+                   help="setlevel: output (V rms) to reach at 0 dBFS, e.g. 2 (RCA) or 4 (XLR); "
+                        "without it, setlevel helps find the loudest clean setting")
+    p.add_argument("--max-time", type=float, default=600.0,
+                   help="setlevel: stop the tone after this many seconds even without Enter")
 
     sub = p.add_subparsers(dest="test", required=True)
-    for name in ("check", "zout", "polarity", "interface", "linearity", "imdlevel", "all"):
+    for name in ("setlevel", "check", "zout", "polarity", "interface", "linearity", "imdlevel", "all"):
         sub.add_parser(name)
     s = sub.add_parser("stability")
     s.add_argument("--readings", type=int, default=20, help="repeated 997 Hz level readings")
@@ -1838,11 +1904,16 @@ def _main(u, a, rep):
             if not a.no_reset:
                 rig.setc("*RST", slow=True)
                 rig.w("*CLS")
+            rig.level_setting = ""
+            if a.set_level and a.test != "setlevel":
+                run_one(rig, a, rep, log, "setlevel", a.fs[:1], {})
             if a.test == "all":
                 run_all(rig, a, rep, log)
             else:
                 run(rig, a, rep, log)
             rig.cleanup()
+            if rig.level_setting:
+                rep.info("DUT volume setting", rig.level_setting)
     finally:
         if rig.dut:
             msg = rig.dut.restore()
@@ -1871,7 +1942,6 @@ def run_all(rig, a, rep, log):
         if name in rig.src.unsupported:
             log(f"\n=== {name}: needs the UPL's own generator; skipped with --source {rig.src.name} ===")
             continue
-        fn, header = TESTS[name]
         rates = a.fs
         if which == "first":
             rates = a.fs[:1]
@@ -1880,14 +1950,21 @@ def run_all(rig, a, rep, log):
         elif which == "48k":
             rates = [48000] if 48000 in a.fs else a.fs[:1]
         a.level = per_test_level.get(name, a.level)
-        rows = []
-        try:
-            for fs in rates:
-                log(f"\n=== {name} @ {fs} Hz ===")
-                rows += fn(rig, a, fs, ctx)
-        finally:
-            rep.csv(f"{name}.csv", header, rows)
-            report_test(rep, name, header, rows)
+        run_one(rig, a, rep, log, name, rates, ctx)
+
+
+def run_one(rig, a, rep, log, name, rates, ctx):
+    """Test `name` at each of `rates`. The CSV and report section are written even if a
+    rate fails, keeping the rates before it."""
+    fn, header = TESTS[name]
+    rows = []
+    try:
+        for fs in rates:
+            log(f"\n=== {name} @ {fs} Hz ===")
+            rows += fn(rig, a, fs, ctx)
+    finally:
+        rep.csv(f"{name}.csv", header, rows)
+        report_test(rep, name, header, rows)
 
 
 if __name__ == "__main__":

@@ -392,6 +392,7 @@ python measurements/dac_test.py --port COM7 --source pc --device 16 --fs 44100,9
 
 | Test | What it answers |
 |---|---|
+| `setlevel` | Guided volume setting for a DUT with a manual knob (see [Setting the volume](#setting-the-volume)). Not part of `all`; `--set-level` runs it before any test |
 | `check` | Does it lock at each rate? 0 dBFS output (V), L−R balance, DC offset |
 | `fr` | Response 10 Hz–20 kHz per rate, both channels, as **broadband RMS and generator-tracking selective RMS**, repeated. Its summary says whether the problem is L/R mismatch, non-signal energy inflating the RMS reading (images, hum, noise), non-repeatability, or a sinc droop (NOS DAC) |
 | `thdn` | THD+N and THD vs level and vs frequency; AES17 dynamic range; idle noise (and whether it mutes on digital zero) |
@@ -431,6 +432,9 @@ python measurements/dac_test.py --port COM7 --source pc --device 16 --fs 44100,9
 | `--no-reset` | | skip the initial `*RST` |
 | `--stay-remote` | | leave the UPL in REMOTE (default: hand the front panel back at the end) |
 | `--dut NAME`, `--dut-port`, `--volume dB` | port COM2 | control a supported DUT (see above); `--volume` needs `--dut` |
+| `--set-level` | | run the guided `setlevel` step first, then the test(s) |
+| `--target V` | | `setlevel`: output to reach at 0 dBFS (V rms); without it, find the loudest clean setting |
+| `--max-time` | 600 s | `setlevel`: stop the tone after this long even without Enter |
 | `--dut-spec NAME\|FILE` | | print a DUT's published figures next to each result |
 | `--label`, `--outdir` | `dac` | where results go (see [Where results go](#where-results-go)) |
 
@@ -447,8 +451,44 @@ python measurements/dac_test.py --port COM7 --source pc --device 16 --fs 44100,9
 | `stability` | `--readings 20` `--monitor 0` (seconds of live L/R level streaming afterwards) |
 | `volsweep` | `--volumes -20,-15,-10,-6,-3,-1,0,1,3,6,10` `--level -1` |
 
-`check`, `xtalk`, `zout`, `polarity`, `interface`, `linearity`, `imdlevel` and `all` take no
+`setlevel`, `check`, `xtalk`, `zout`, `polarity`, `interface`, `linearity`, `imdlevel` and `all` take no
 options of their own; `all` uses the defaults above for every test.
+
+#### Setting the volume
+
+Most results depend on where the DUT's volume is set, so set it deliberately and record it. What
+to aim for:
+
+- **A DAC with a fixed-output or bypass mode:** use it. That's the DAC without its volume
+  control, and the setting to compare.
+- **A DAC whose volume can reach unity** (0 dB, max): usually set it there. A digital volume
+  control costs a dB of dynamic range for every dB it attenuates (the M51 showed exactly this).
+  **But check that 0 dBFS doesn't clip** at that setting; if it does, back off until it's clean
+  (the M51 needed −1 dB).
+- **To compare with Audio Science Review:** set it so 0 dBFS gives **2 V** unbalanced (RCA) or
+  **4 V** balanced (XLR), if the volume allows.
+- **A headphone amp or player whose volume is just step numbers** (0–120, 1–60…): the numbers
+  mean nothing in dB, so pick by output. Either the **loudest clean setting** (the highest step
+  where a 0 dBFS tone doesn't clip) or a **fixed output** you use for every device you compare.
+  Note the step number. Turn off EQ, DSP, "enhancers" and volume limiters first.
+
+`setlevel` guides you through it. It plays 997 Hz at 0 dBFS and shows both channels' output and
+THD about once a second while you turn the knob:
+
+```bash
+python measurements/dac_test.py --port COM7 --target 2 setlevel             # aim for 2 V
+python measurements/dac_test.py --port COM7 setlevel                        # loudest clean setting
+python measurements/dac_test.py --port COM7 --set-level --target 2 all      # set it, then test
+```
+
+With `--target` each line says `turn UP` / `turn DOWN` / `OK` (within 0.1 dB, on the average of
+L and R). Without it, a line is flagged `CLIPPING?` once THD is 10 dB worse than the best seen so
+far: turn up until that appears, then back down until it's gone. Press Enter when done; it then
+asks what the device's volume reads and puts that in the report. It measures THD, not THD+N, on
+purpose: THD+N of a clipping 0 dBFS tone latches the UPL's THD+N floor about 6 dB high.
+
+**The tone is a full-scale 0 dBFS sine**, played until you press Enter (or `--max-time`): only the
+UPL may be connected to the outputs. No headphones, no amplifier.
 
 **Response above 20 kHz:** `fr --wide`, or `fr --stop <Hz>`. A stop above 21 kHz switches to the
 100 kHz analyzer (A100) by itself. The sample rate sets the ceiling: a DAC can't output anything
