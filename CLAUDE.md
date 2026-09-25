@@ -89,6 +89,51 @@ turn off "enhancements" before `fr`/`thdn`, or the noise figures will be ~20 dB 
 Results: `results/dac/dac_20260925-233747/`. `upacd_test.py` also uses exclusive WASAPI but not the
 same callback stream; not checked.
 
+### Full `all` on the ROG14 headphone out, volume 100 % (2026‑09‑25, 23:41)
+
+`--source pc --device 10 --settle 0.6 --set-level --target 2 --label rog14 all`, GPIB, ~27 min,
+`results/dac/rog14_20260925-234128/`. **The volume theory was right:** 0.0865 V → **1.536 V** at
+0 dBFS (44.1k, 100 %). 2 V wasn't reachable, so the level was left 2.3 dB short. No clipping at 0 dBFS.
+- **Gain depends on the rate, deterministically:** re 44.1k, 48k −0.60 dB, 88.2k +1.15, 96k +0.20:
+  identical ratios in the low-volume run. So it's in the codec/driver path. L−R −0.049 dB everywhere.
+- **Each rate family has its own path.** Filter (noise response): 44.1k only −20 dB at 0.49–0.50 fs
+  and −36 just above fs/2 (slow roll-off); 48k −70 by 0.49 fs (steep); 88.2k stopband only −40…−49;
+  96k −6 dB at fs/2 and −34 at 0.55–0.60 fs. THD+N at −1 dBFS: 44.1/88.2 **−87/−86 dB**, 48/96
+  **−91.5/−91 dB**, with H2 −94 dBc at every rate (so the excess is non-harmonic); idle noise A-wtd
+  14.7/15 µV vs 11.5/11.6 µV. CCIF: 44.1k −99, 48k −110 dB. **Not internal resampling to 48k:** at
+  44.1k there's no image at 48−19 = 29 kHz (−103 dBc = floor).
+- Otherwise: FR ±0.15 dB 10 Hz–20 kHz at every rate, repeatable to 0.02 dB; DR 99.4–102.9 dB A;
+  H2 −94, H3 −105 dBc; hum ≤ −113 dBc; SMPTE −85/−86 dB; **Zout 50/51 Ω** (a series resistor, so
+  the FR will tilt with low-impedance headphones); crosstalk −97 dB @1k rising 20 dB/decade to −68 @16k
+  (capacitive coupling, rate-independent); ultrasonic noise +16.5 dB (100k vs 22k); linearity within
+  0.1 dB to −90 dBFS; J-test 24-bit ≤ −113 dBc.
+- **Script artifacts found (not DUT behaviour). All fixed the next morning (2026‑09‑26), checked offline only;
+  re-analysing this run's CSVs with the new code is noted per item:**
+  - `images` "hum" on A100 is meaningless: at 37.5 Hz resolution 50/60 Hz share bins (both −82.1).
+    And a **77 kHz spur at −90 dBc is present at all four rates**, including 44.1k where 77k is no
+    image, so the "77.0k image" listed at 48k/96k is that spur. 48k's real image is 29 kHz, −88.6 dBc.
+  - `multitone` "worst product −57.8 dBc at 3557 Hz" = the bin next to the 3551 Hz tone (off-bin
+    leakage from PC tones), not an IMD product. **Fixed:** the exclusion is now measured from the
+    tones themselves, ±16 bins for PC tones (±4 for UPL ATRack) → this run: −83.1 dBc at 4242 Hz.
+  - `jtest` 16-bit at 44.1k: "worst sideband −108.6 dBc at 2067 Hz". f0 = 48·fs/192, so *every*
+    f0 ± odd·fs/192 is also an odd harmonic of the J-test's own LSB square wave. Far from the tone those
+    harmonics are big (9th, 2067 Hz: −110 dBc predicted). The sideband search runs all the way down
+    to 0 Hz. It should stay near the tone (±3 kHz, like the "other spur" search) or subtract the
+    stimulus's own harmonic level. **Fixed:** limited to ±3 kHz → this run: −110.1 dBc at 10 795 Hz.
+  - `linearity` below −100 dBFS is noise (−110: −20.8 dB, −130: +1.5 dB), not flagged as such.
+    **Fixed:** "within 0.1 dB" is now contiguous from 0 dBFS, and the first point > 1 dB off is
+    reported as where the noise starts (this run: −90 / from −100).
+  - 6× `SENS:FREQ 20000 HZ` → `-222` = the fixed selective bandpass at the 20 kHz FR point, 48/88.2/
+    96k × 2 passes (A22 can't centre it there). That point used the previous bandpass. It still agreed
+    with broadband RMS to 0.02 dB, but it should be clamped. **Fixed:** `Rig.set_sel_freq()` backs
+    off 1 % per rejection, keeps the highest value that worked, logs it once, and drops the handled
+    `-222`s from the rejected-commands list.
+  - `thdn` "THD+N floor may now be latched" printed twice per rate: `unlatch()` needs the native
+    sweep, i.e. the UPL generator. Harmless at −87…−93 dB (a −103 floor adds ≤ 0.4 dB).
+    **Fixed:** a clearer note, once per run.
+  - Images hum: **fixed**, hum is now only reported when bins are ≤ 10 Hz. The 77 kHz spur is
+    still listed as an image at 48k/96k (the script can't tell them apart).
+
 ## DAC impulse/step response, `dac_test.py impulse` (2026‑09‑25) — first live run 22:28, see end
 
 Stimulus: one sample at `--imp-level` (−3 dBFS) every `--period` (10 ms). UPL source = ARB

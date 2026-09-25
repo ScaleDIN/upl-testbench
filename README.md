@@ -410,14 +410,20 @@ samples with dither off, so it reaches the DAC bit-exact. For that to hold:
   `python -c "import sounddevice as sd; sd.check_output_settings(device=N, samplerate=44100, extra_settings=sd.WasapiSettings(exclusive=True))"`.
 - the level at 0 dBFS depends on the device's own volume: exclusive mode skips the Windows mixer, but
   the codec's volume control can still act. Set it to 100 % before measuring. (The laptop's headphone
-  output gave only ~85 mV at 0 dBFS with its volume turned down.)
+  output gave only ~85 mV at 0 dBFS with its volume turned down, and 1.54 V at 100 %.)
 
 What it can't do: the UPL's analyzer can't track a PC's generator, so selective measurements use a
 bandpass the script moves to each tone (same results, set differently). `jitter`, `interface` and
 `polarity` need the UPL's digital generator and are skipped. With a USB→S/PDIF interface, the
 interface's own clock jitter is part of every result, and nothing here can separate it from the
-DAC's. **`--source pc` has been run live only as far as `check`**, on the laptop's own headphone
-output (2026‑09‑25/26); the other tests haven't been run from the PC yet.
+DAC's. **`--source pc` has been run live through a full `all`**, on the laptop's own headphone
+output (2026‑09‑25, `results/dac/rog14_*`). Things that run showed about the PC source:
+- `thdn` can't reset the analyzer's THD+N floor (the reset sweep needs the UPL's generator) and
+  says so once. It matters only for a DUT cleaner than about −100 dB THD+N.
+- A22 won't centre the selective bandpass at 20 kHz; the script backs it off 1 % at a time and
+  says where it ended up (a 1/3-octave band still passes the tone).
+- `images` on A100 shows no hum figures (37.5 Hz bins can't separate 50 from 60 Hz; use `fft`).
+  A fixed spur that happens to sit on k·fs ± f is still listed as an image: check it at other rates.
 
 **The UPL source (`--source upl`, needs B2 or B29)** is bit-exact too, and the UPL sets the sample
 rate. It can also degrade the interface on purpose: jitter (with UPL‑B22), a 100 m cable
@@ -647,7 +653,7 @@ leaves the analyzer's THD+N floor ~6 dB worse until a native RMS sweep or a powe
 `thdn` clears it itself; if THD+N readings elsewhere look ~6 dB high, that's the cause. `thdn`'s
 `STILL LATCHED?` warning fires whenever the reset check reads above −106 dB, so on a DAC whose
 own THD+N is worse than that (e.g. −84 dB) it's a false alarm.
-**Not yet run live:** `--source pc` beyond `check`, `--dut` / `--volume`, and `volsweep`.
+**Not yet run live:** `--dut` / `--volume`, `volsweep`, and `--source pc` into a real external DAC (only the laptop's own output so far).
 
 ### Analog DUT characterization: preamps and friends (`measurements/analog_test.py`)
 

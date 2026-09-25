@@ -366,6 +366,8 @@ class Rig:
         self.fixed_sel = False
         self.state = None           # (fs, analyzer) currently configured
         self.rejected = []
+        self.sel_fmax = None          # highest SENS:FREQ the fixed bandpass accepted after a -222
+        self.latch_warned = False
         # frequency sweeps on the UPL's own sweep engine (UPL generator only)
         self.native = source == "upl" and not getattr(args, "stepped", False)
 
@@ -408,7 +410,11 @@ class Rig:
         does, both channels, every time (4/4 live 2026-09-25; a 3-point sweep only
         cleared CH1). Then re-checks the floor at 997 Hz / -1 dBFS."""
         if not self.native:
-            self.log("   (THD+N floor may now be latched ~7 dB high until the UPL is power-cycled)")
+            if not self.latch_warned:             # once per run, not twice per rate
+                self.log("   (THD+N floor reset skipped: it needs the UPL's generator. If a 0 dBFS\n"
+                         "    tone clipped, the analyzer's THD+N floor may sit at ~-103 dB instead of\n"
+                         "    ~-110 until a native sweep or a power cycle; irrelevant for a DUT above ~-95 dB)")
+                self.latch_warned = True
             return
         self.func("RMS")
         self.sweep(geomspace(10.0, 20000.0, 31), -10.0)
@@ -522,8 +528,27 @@ class Rig:
         frequency actually played (the PC source snaps it to its loop length)."""
         f = self.src.tone(f, dbfs, ch)
         if self.fixed_sel:                        # selective filter can't track a PC
-            self.setc(f"SENS:FREQ {f:.4f} HZ", quiet=True)
+            self.set_sel_freq(f)
         return f
+
+    def set_sel_freq(self, f):
+        """SENS:FREQ for the fixed selective bandpass. A22 rejects 20000 Hz (-222,
+        live 2026-09-25) while 19845 is fine; a rejection used to leave the previous
+        point's bandpass in place. Now back off 1 % at a time (a 1/3-octave or 1 %
+        band still passes the tone) and remember the limit."""
+        fc = min(f, self.sel_fmax) if self.sel_fmax else f
+        for _ in range(8):
+            if self.setc(f"SENS:FREQ {fc:.4f} HZ", quiet=True):
+                break
+            self.rejected.pop()                   # handled here, not a real rejection
+            fc *= 0.99
+        else:
+            self.log(f"  ! selective bandpass: SENS:FREQ near {f:.0f} Hz rejected, left as it was")
+            return
+        if fc < f and self.sel_fmax != fc:
+            self.log(f"   (selective bandpass centred at {fc:.0f} Hz for a {f:.0f} Hz tone: "
+                     f"the analyzer won't go higher)")
+            self.sel_fmax = fc
 
     def selective(self, band):
         """RMSS whose bandpass follows the test tone: GENTrack for the UPL's own
@@ -1010,12 +1035,15 @@ def analyze_spectrum(freqs, y, f0, fs, log, tag):
     if hs:
         log("     harmonics (dBc): " + ", ".join(hs))
     mains = []
-    for m in (50, 60, 100, 120, 150, 180):
+    # only with bins fine enough to tell 50 from 60 Hz: at A100's 37.5 Hz they
+    # share bins and read the window's skirt around DC (both -82.1 dBc, live)
+    for m in ((50, 60, 100, 120, 150, 180) if res <= 10 else ()):
         if m < fmax:
             v = db(peak_near(freqs, y, m, max(2 * res, 2.0)), fund)
             out[f"mains{m}_dBc"] = v
             mains.append(f"{m}Hz {fmt(v, '%.1f')}")
-    log("     hum (dBc):       " + ", ".join(mains))
+    log("     hum (dBc):       " + (", ".join(mains) if mains else
+                                    f"n/a at {res:.1f} Hz resolution (see the A22 fft test)"))
     imgs = []
     for k in (1, 2, 3):
         for s in (-1, 1):
@@ -1469,7 +1497,11 @@ def t_jtest(rig, a, fs, ctx):
         fund = peak_near(freqs, y, f0, 4 * res)
         sb = []
         k = 1
-        while k * fsq < min(f0, 20000 - f0):
+        # only near the tone: f0 = 48 * fs/192, so every f0 +/- odd*fs/192 is also an
+        # odd harmonic of the LSB square wave itself, and far from f0 (low order) those
+        # are the stimulus, not jitter (16-bit, 44.1k: the 9th at 2067 Hz, ~-110 dBc,
+        # was reported as the "worst sideband"). Same +/-3 kHz as the spur search.
+        while k * fsq < min(f0, 20000 - f0, 3000):
             for s in (-1, 1):
                 v = db(peak_near(freqs, y, f0 + s * k * fsq, 2 * res), fund)
                 if v is not None:
@@ -1808,8 +1840,12 @@ def t_multitone(rig, a, fs, ctx):
             if near:
                 found.append(max(near))
         ref = max(v for v, _ in found) if found else None
+        # measured from the tones themselves, not their peak bins; off-bin tones
+        # (PC source) leak a Blackman-Harris skirt well past the main lobe: -58 dBc
+        # 4 bins from a 3540 Hz tone, live 2026-09-25 -- same +/-16 bins as jtest
+        excl = (4 if rig.src.tracks else 16) * res
         between = [(v, fx) for fx, v in zip(freqs, y) if 20 <= fx <= 20000
-                   and all(abs(fx - t) > 4 * res for _, t in found)]
+                   and all(abs(fx - t) > excl for t in tones)]
         if ref and between:
             wv, wf = max(between)
             med = sorted(v for v, _ in between)[len(between) // 2]
@@ -1838,8 +1874,12 @@ def t_linearity(rig, a, fs, ctx):
         rows.append((fs, L, v1, v2, e[0], e[1]))
         log(f"   {L:5d} dBFS: error L {fmt(e[0], '%+.2f')} dB  R {fmt(e[1], '%+.2f')} dB")
     for ch, name in ((4, "L"), (5, "R")):
-        ok = [r[1] for r in rows if r[ch] is not None and abs(r[ch]) <= 0.1]
-        log(f"   {name}: within 0.1 dB down to {min(ok) if ok else 'n/a'} dBFS")
+        errs = [(r[1], r[ch]) for r in rows]      # contiguous from 0 dBFS down
+        ok = next((errs[i - 1][0] for i, (_, e) in enumerate(errs) if e is None or abs(e) > 0.1),
+                  errs[-1][0]) if errs and errs[0][1] is not None else None
+        noisy = next((L for L, e in errs if e is None or abs(e) > 1.0), None)
+        log(f"   {name}: within 0.1 dB down to {ok if ok is not None else 'n/a'} dBFS"
+            + (f"; from {noisy} dBFS down the readings are noise, not the DAC" if noisy is not None else ""))
     rig.spec("linearity")
     return rows
 
