@@ -23,6 +23,7 @@ Separate guides:
 - [UPL self-test](#upl-self-test)
 - **[Tests for any device](#tests-for-any-device)**: the DAC suite, test-signal files, file and
   test-disc playback, analyzer filter checks, the soundcard suite
+  - **DAC quick start: [I just want measurements](#i-just-want-measurements-tldr)**
 - [Equipment-specific control](#equipment-specific-control): pointers to the per-device guides
 - Reference: [firmware archive extraction](#firmware-archive-extraction-toolslzh_extractpy),
   [folder layout](#folder-layout), [where things are documented](#where-things-are-documented)
@@ -317,6 +318,28 @@ analyzer input, and nothing here assumes a particular make. Start with these; th
 One test suite for any DAC, whatever its digital input: something plays a bit-exact test signal
 into the DAC, and the UPL's analog analyzer measures what comes out. Every measurement and
 diagnosis is the same whichever source plays the signal, so results are comparable across DACs.
+
+#### I just want measurements (TL;DR)
+
+A Windows PC with the DAC on USB (or a USB→S/PDIF interface in front of it), the DAC's L/R
+outputs into the UPL's analyzer inputs 1 and 2, **nothing else connected to the DAC's outputs**,
+and the UPL on remote (`probe` answers, see [Setup](#setup)):
+
+```bash
+python measurements/upacd_test.py devices
+```
+Note the number of the DAC's **Windows WASAPI** entry, and use it as `N` below:
+```bash
+python measurements/dac_test.py --port COM7 --source pc --device N --settle 0.6 check
+python measurements/dac_test.py --port COM7 --source pc --device N --settle 0.6 --set-level --target 2 --label mydac all
+```
+- `check` must say `lock: YES`. If it doesn't, fix that first (cable, input, sample rate).
+- `--set-level --target 2` walks you through setting the DAC's volume for 2 V at full scale, then
+  runs every test. A DAC without a volume control: leave out `--set-level --target 2`.
+- It takes a while. The results are in `results/dac/mydac_<timestamp>/report.html`.
+
+With UPL‑B29 feeding the DAC's S/PDIF/AES input instead, leave out
+`--source pc --device N --settle 0.6`. The rest of this section explains each step and option.
 
 #### Choosing the signal source
 
