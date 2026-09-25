@@ -179,6 +179,33 @@ rejected. Report: `results/analog/dcx_stereo_20260925-212921/`.
 - Fix found on the way: `*RST` was blamed for a stale `-420` from the VISA open → `*CLS` before
   `*RST` in `analog_test.py` and `dac_test.py`.
 
+**SMPTE chased (same evening; one-off scripts `smpte_probe.py`/`smpte_hf.py`, scratchpad only).
+Verdict: the DCX's nonlinearity grows with the *high* tone's frequency. It isn't a
+low-frequency problem.**
+- UPL loopback (`INP:TYPE GEN2`) SMPTE −102…−108 dB at 0.1–7 V, flat with level and with carrier
+  frequency → the DCX readings are genuine.
+- **Carrier frequency is the key variable:** 60 Hz + 2/4/7/12 kHz at 1 V: −85/−80/−75/−71 dB;
+  at 3.16 V: −74.6/−70.8/−67.0/−63.2 dB. **~+5 dB per octave of carrier** (≈ proportional to f, the
+  signature of an error ∝ dV/dt: loop gain falling with frequency / slew-type). Loopback flat.
+- **Low tone barely matters:** 30/60/250 Hz + 7 kHz at 1 V all −77…−78 dB; at 3.16 V −66.5/−68.3/
+  −69.6. Rules out a coupling-cap / LF mechanism.
+- FFT at 3.16 V: sidebands **7 kHz ± 120 Hz −74/−76 dBc** dominate (±60 only −88/−90), H3(7 kHz)
+  −83.7 dBc with the 7 kHz tone at just 0.76 V, while the 60 Hz tone's own H3 is only −98 dBc. A
+  memoryless cubic would put the ±120 Hz sidebands ~9.5 dB above H3(60) = −88.5; they're 13 dB
+  higher → the 7 kHz tone is what gets distorted, as the LF swing moves the operating point.
+- Both halves contribute: at ~1.05 V out, gain +10 (0.316 V in) −77.3, gain 0 −74.4, gain −10
+  (3.16 V in) −73.4; at ~3.3 V out +10 → −68.9, 0 → −66.8. Mostly output-level-driven (DAC/output
+  stage), with an input-side (ADC) share of similar size when the input is hot.
+- Single-sine THD vs level is **not** LF-specific: at 7 V, 40 Hz −82.3, 60 Hz −83.1, 100 Hz −83.8,
+  1 kHz −84.8 dB; ~−104 at 1 V for 40–100 Hz. So no "contradiction" with the 1 kHz THD+N sweep:
+  the same frequency-rising nonlinearity as the 23 Sep/today THD-vs-frequency rise above 2 kHz;
+  SMPTE just parks a 7 kHz carrier under a 12 dB bigger LF swing and references it to that small
+  carrier.
+- Practical: keep the DCX's levels moderate (≈ +2…+6 dBu is its sweet spot); treble under heavy
+  bass is where it's weakest. The 1 kHz THD figure overstates how clean it is.
+- Seen once: cleanup's `SOUR:FUNC SIN` → `-200` straight after the 12 kHz MDIS point, but the
+  generator read back SIN, muted, no error queued. Not reproduced.
+
 ## Serial retry with a 3-wire null modem, XON/XOFF (2026‑09‑25)
 
 User swapped null modem to retry the old serial failures. Same Prolific adapter (COM2; the only
