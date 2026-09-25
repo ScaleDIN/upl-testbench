@@ -56,13 +56,13 @@ segmentation included -- with no instrument and no audio device.
 Examples:
     python measurements/upacd_test.py --dry-run linearity
     python measurements/upacd_test.py devices
-    python measurements/upacd_test.py --upl-port COM7 --device 16 --exclusive \
+    python measurements/upacd_test.py --upl-port COM7 --device N --exclusive \
         --label m51_44k linearity
-    python measurements/upacd_test.py --upl-port COM7 --device 5 --exclusive \
+    python measurements/upacd_test.py --upl-port COM7 --device N --exclusive \
         --label laptop_builtin linearity
-    python measurements/upacd_test.py --upl-port COM7 --device 16 --exclusive \
+    python measurements/upacd_test.py --upl-port COM7 --device N --exclusive \
         segments --track 6 --tones 20,40,100,200,500,1000,5000,7000,10000,16000,18000,20000
-    python measurements/upacd_test.py --upl-port COM7 --device 16 --exclusive --label m51_96k \
+    python measurements/upacd_test.py --upl-port COM7 --device N --exclusive --label m51_96k \
         --wav testsignals/96k_24/11_level_staircase.wav linearity
     python measurements/upacd_test.py --upl-port COM7 --external --label a306_file_96k \
         --wav testsignals/96k_24/10_third_octaves_-6dBFS.wav segments

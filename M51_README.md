@@ -34,11 +34,11 @@ python nad_m51.py --help                     # every subcommand
   when something downstream does the level control.
 
 ```bash
-python measurements/dac_test.py --port COM7 --source pc --device 16 --fs 44100,96000,192000 \
+python measurements/dac_test.py --port COM7 --source pc --device N --fs 44100,96000,192000 \
     --settle 0.6 --label m51 all                                  # fixed-output mode
-python measurements/dac_test.py --port COM7 --source pc --device 16 --fs 96000 \
+python measurements/dac_test.py --port COM7 --source pc --device N --fs 96000 \
     --dut m51 --volume 0 --label m51_0dB all                       # variable, run at 0 dB
-python measurements/dac_test.py --port COM7 --source pc --device 16 --fs 48000 \
+python measurements/dac_test.py --port COM7 --source pc --device N --fs 48000 \
     --dut m51 volsweep --volumes -20,-10,-6,-3,0,3,6,10
 python measurements/dac_test.py --port COM7 --fs 44100,48000,88200,96000 --label m51_optical all
 ```

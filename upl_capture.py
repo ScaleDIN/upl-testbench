@@ -220,6 +220,7 @@ class DryRunUPL:
     sequence reviewed -- without an instrument on the other end."""
 
     IDN = "ROHDE & SCHWARZ, UPL, 3.06, 0.33"
+    OPT = "B1(0.01),B29(2.16),B21,B22,B4,B5(1.62),B6,0,B10,0,B23,0"   # this unit's, live
 
     def __init__(self, points=8, echo=True, fft_lines=None, fft_res=5.859375, fft_start=0.0):
         self.sent = []
@@ -260,6 +261,8 @@ class DryRunUPL:
         c = cmd.strip().upper()
         if c.startswith("*IDN?"):
             return self.IDN
+        if c.startswith("*OPT?"):
+            return self.OPT
         if c.startswith("*OPC?"):
             return "1"
         if c.startswith("SYST:ERR"):

@@ -4,14 +4,17 @@ dac_test.py - characterize a DAC with the UPL, whatever its digital input.
 
 Two signal sources, one set of measurements (--source):
 
-  upl (default)  UPL digital generator (B29)  ->  DAC S/PDIF/AES input
+  upl (default)  UPL digital generator (B29; B2 at 44.1/48 kHz only)  ->  DAC S/PDIF/AES
+                 input. *OPT? is checked first: without either option the run stops
+                 and points to --source pc.
                  Bit-exact, sample rate set by the UPL, and the interface itself
                  can be degraded on purpose (jitter via B22, cable simulator,
                  reduced signal voltage, word length, off-nominal sample rate).
-  pc             this PC  --USB-->  DAC   (NAD M51, Sony NW-A306 in USB-DAC mode,
-                 laptop output, ...). Tones synthesized here and played bit-exact
-                 through WASAPI exclusive mode (--device N). jitter, interface and
-                 polarity need the UPL generator and are skipped.
+  pc             this PC  --USB-->  DAC, or --USB--> USB-to-S/PDIF interface --> DAC's
+                 coax/optical input: what a UPL without a digital audio option uses.
+                 Tones synthesized here and played bit-exact through WASAPI exclusive
+                 mode (Windows; --device N must be a 'Windows WASAPI' entry). jitter,
+                 interface and polarity need the UPL generator and are skipped.
 
   In both cases:  DAC analog out (L, R)  ->  UPL analog analyzer (both channels).
 
@@ -59,12 +62,12 @@ Usage:
   python measurements/dac_test.py --port COM7 check
   python measurements/dac_test.py --port COM7 --fs 44100,96000 fr
   python measurements/dac_test.py --port GPIB0::20::INSTR --label mydac all
-  python measurements/dac_test.py --port COM7 --source pc --device 16 --fs 48000 \
+  python measurements/dac_test.py --port COM7 --source pc --device N --fs 48000 \
       --settle 0.6 --label m51_usb all
   # NAD M51: log its state, run at 0 dB, restore after (omit --volume in fixed-output mode)
-  python measurements/dac_test.py --port COM7 --source pc --device 16 --fs 96000 \
+  python measurements/dac_test.py --port COM7 --source pc --device N --fs 96000 \
       --dut m51 --dut-port COM2 --volume 0 --label m51_usb all
-  python measurements/dac_test.py --port COM7 --source pc --device 16 --fs 48000 \
+  python measurements/dac_test.py --port COM7 --source pc --device N --fs 48000 \
       --dut m51 volsweep
 
 Output: results/dac/<label>_<timestamp>/ (or --outdir) -- report.html with
@@ -598,7 +601,8 @@ class Rig:
 # one is playing. A source provides configure(fs, analyzer), tone(f, dbfs, ch),
 # silence(), twin("SMPTE"|"CCIF", dbfs), jtest(bits), noise(dbfs),
 # multitone(tones, dbfs), sine() and cleanup(), plus `tracks` (can the analyzer
-# GENTrack it?) and `unsupported` (tests it cannot do).
+# GENTrack it?) and `unsupported` ({test: why it can't run it}); check_options() adds
+# to the UPL source's from *OPT?.
 
 def ccif_mean(fs):
     """CCIF mean frequency: 19.5 kHz (19 + 20 kHz), or 19 kHz (18.5 + 19.5) where the
@@ -613,16 +617,16 @@ def ccif_name(fs):
 
 
 class UPLSource:
-    """The UPL's digital generator (B29) into the DAC's S/PDIF/AES input."""
+    """The UPL's digital generator (B29, or B2 at 44.1/48 kHz) into the DAC's S/PDIF/AES input."""
     name = "upl"
     tracks = True
-    unsupported = frozenset()
     CH_SEL = {"both": "CH2Is1", "L": "CH1", "R": "CH2"}
 
     def __init__(self, rig):
         self.rig = rig
         self.ch = "both"
         self.twin_cur = None
+        self.unsupported = {}
 
     def configure(self, fs, analyzer):
         r, a = self.rig, self.rig.args
@@ -732,7 +736,8 @@ class PCSource:
     frequency set per tone, and the aperture uses AUTO."""
     name = "pc"
     tracks = False
-    unsupported = frozenset({"jitter", "interface", "polarity"})   # need the UPL generator
+    unsupported = {t: "needs the UPL's digital generator (--source upl)"
+                   for t in ("jitter", "interface", "polarity")}
 
     def __init__(self, rig):
         import threading
@@ -760,6 +765,10 @@ class PCSource:
                   f"{'shared' if self.a.shared else 'WASAPI exclusive'})")
             return
         import sounddevice as sd
+        api = sd.query_hostapis(sd.query_devices(self.a.device)["hostapi"])["name"]
+        if not self.a.shared and "WASAPI" not in api:
+            raise SystemExit(f"--device {self.a.device} is a {api} device; exclusive mode needs a "
+                             f"'Windows WASAPI' one (python measurements/upacd_test.py devices)")
         extra = None if self.a.shared else sd.WasapiSettings(exclusive=True)
         self.stream = sd.OutputStream(samplerate=fs, device=self.a.device, channels=2,
                                       dtype="int32", callback=self._cb, dither_off=True,
@@ -1734,11 +1743,32 @@ ALL_PLAN = [
 ]
 
 
+def check_options(rig, a, log):
+    """--source upl: is the digital audio option in *OPT?, and which tests does what's
+    missing rule out? B29 = 96 kHz, B2 = the older 55 kHz one (44.1/48 kHz here),
+    B22 = jitter injection. Stops the run if nothing can feed the DAC."""
+    opt = rig.q("*OPT?")
+    have = {t.split("(")[0].strip() for t in opt.split(",")}
+    log(f"# UPL options: {opt}")
+    if "B29" not in have and "B2" not in have:
+        raise SystemExit("This UPL has no digital audio option (UPL-B29 or B2), so it can't feed the "
+                         "DAC. Use this PC as the source: --source pc --device N (a USB DAC, or a "
+                         "USB-to-S/PDIF interface into the DAC's coax/optical input). See the README, "
+                         "'Choosing the signal source'.")
+    if "B29" not in have:
+        high = [f for f in a.fs if f > BRM_MAX]
+        if high:
+            raise SystemExit(f"This UPL has UPL-B2, which runs at 44.1/48 kHz only: drop {high} "
+                             f"from --fs (e.g. --fs 44100,48000).")
+    if "B22" not in have:
+        rig.src.unsupported["jitter"] = "needs UPL-B22 (jitter injection), not in *OPT?"
+
+
 def run(rig, a, rep, log):
     """A single test at every --fs."""
     name = "images" if (a.test == "fft" and a.images) else a.test
     if name in rig.src.unsupported:
-        log(f"\n=== {name}: needs the UPL's own generator (--source upl); skipped ===")
+        log(f"\n=== {name}: {rig.src.unsupported[name]}; skipped ===")
         return
     if name == "volsweep" and rig.dut is None:
         log("\n=== volsweep: needs --dut (a DUT whose volume this script can set); skipped ===")
@@ -1888,6 +1918,8 @@ def _main(u, a, rep):
     idn = rig.q("*IDN?")
     log(f"# UPL: {idn}")
     rep.info("UPL", idn)
+    if a.source == "upl":
+        check_options(rig, a, log)
     rep.info("Source", a.source + (f" (device {a.device})" if a.source == "pc" else ""))
     rep.info("Sample rates", ", ".join(str(f) for f in a.fs))
     if a.spec:
@@ -1940,7 +1972,7 @@ def run_all(rig, a, rep, log):
     per_test_level = {"fr": -10.0, "fft": -1.0, "images": -1.0, "imd": -3.0}
     for name, which in ALL_PLAN:
         if name in rig.src.unsupported:
-            log(f"\n=== {name}: needs the UPL's own generator; skipped with --source {rig.src.name} ===")
+            log(f"\n=== {name}: {rig.src.unsupported[name]}; skipped ===")
             continue
         rates = a.fs
         if which == "first":
