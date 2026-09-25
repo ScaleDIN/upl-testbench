@@ -180,6 +180,22 @@ into REMOTE (so it received) but never replied, as it waits for CTS with RTS/CTS
   a text-only fallback. The handshake setting is an OPTIONS-panel item: *RST doesn't touch it,
   a Backspace boot resets it to RTS/CTS.
 
+## GPIB selftest + `preserve_state` fix (2026‑09‑25, evening)
+
+82357B back on. First probe failed because the UPL was still on **Remote via COM2**; symptom:
+the write *and* the Device Clear time out, and VISA lists a device at **every** GPIB address.
+Remote via → IEC fixed it.
+- **`upl_selftest.py --port GPIB0::20::INSTR --preserve`: PASS 137/137**
+  (`results/selftest/gpib_preserve_20260925-211152/`). First run of the script over GPIB. Same
+  numbers as the serial runs: THD+N A22 −103.2, A100 −97.6/−97.9 dB, noise 1.50/1.54 and
+  4.59/4.38 µV, digital 0.499989 FS, 47 999.7 / 44 099.8 Hz.
+- **Bug: the restore was skipped.** `preserve_state` checked `SYST:ERR?` after the snapshot and
+  got a *stale* `-420 Query UNTERMINATED` (the cosmetic ones a VISA open leaves), so it decided the
+  snapshot failed and disabled the restore. The snapshot had actually been written; restored it by
+  hand (setup back to `INST D48`), scratch file deleted. **Fix: `*CLS` before the snapshot.**
+  `seqcheck` now allows exactly `*CLS` ahead of it. Verified live: save, `*RST`
+  (→ A25), restore (→ D48, no error), scratch file gone (`-200`).
+
 ## Digital-audio loop failure, 2026‑09‑24 (evening) — cleared by a power cycle, not a setting
 
 **First live run of the updated selftest** (`upl_selftest.py --port COM2 --preserve`, report in

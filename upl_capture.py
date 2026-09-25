@@ -572,6 +572,10 @@ class preserve_state:
         if self.enabled:
             # *OPC? after each slow MMEM command: nothing else may be in flight while the
             # UPL writes/loads a setup (the PL2303 byte-doubling problem, CLAUDE.md)
+            # *CLS first: a stale error (e.g. the -420s a VISA open can leave) would
+            # otherwise be read as the snapshot failing and silently skip the restore
+            # (live 2026-09-25, GPIB selftest). *CLS doesn't touch the setup.
+            self.upl.write("*CLS")
             self.upl.write(f"MMEM:STOR:STAT 2,'{self.path}'")
             self.upl.query("*OPC?")
             err = self.upl.query("SYST:ERR?")
@@ -1188,8 +1192,9 @@ def cmd_seqcheck(upl, args):
     rest = f"MMEM:LOAD:STAT 2,'{STATE_TMP}'"
     check("preserve", stub4.sent, required=[snap, rest, f"MMEM:DEL '{STATE_TMP}'"])
     if snap in stub4.sent and rest in stub4.sent:
-        if stub4.sent.index(snap) != 0:
-            failures.append("preserve: the snapshot must be the very first command")
+        # only *CLS (clears the error queue, not the setup) may precede it
+        if stub4.sent[:stub4.sent.index(snap)] not in ([], ["*CLS"]):
+            failures.append("preserve: the snapshot must be the first command (after *CLS)")
         if stub4.sent.index(rest) < stub4.sent.index("INIT:CONT OFF;*WAI"):
             failures.append("preserve: restore must come after the measurement")
         if "*RST;*WAI" in stub4.sent and stub4.sent.index("*RST;*WAI") < stub4.sent.index(snap):
