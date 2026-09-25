@@ -516,7 +516,8 @@ python measurements/dac_test.py --port COM7 --source pc --device N --fs 44100,96
 | `imdlevel` | SMPTE and CCIF IMD vs level, −60 to 0 dBFS |
 | `filter` | White noise through the DAC, wideband FFT — the reconstruction filter's shape and image-band leakage |
 | `volsweep` | THD+N, THD and level vs the DUT's own volume setting. Needs `--dut`; not part of `all` |
-| `all` | Everything above except `volsweep`, in that order. Not every test runs at every `--fs`: `stability`, `zout`, `polarity`, `multitone`, `linearity`, `imdlevel` run at the first rate only; `jitter` and `jtest` at the rates ≤ 48 kHz; `interface` at 48 kHz (or the first rate). Uses −10 dBFS for `fr`, −1 for `fft`/images, −3 for `imd` |
+| `impulse` | Impulse and step response: a one-sample impulse every 10 ms (UPL: an ARB time-table file; PC: a looped buffer), captured with the UPL's WAVEFORM function on the 100 kHz analyzer and averaged over `--avg 8` captures. Classifies the filter (linear phase / minimum phase / no ringing) and reports ringing frequency and duration, polarity, step overshoot and rise time, and magnitude/phase response by FFT (100 Hz resolution). L and R are captured one after the other, so no L/R timing and no absolute latency. If it never triggers, the UPL keeps waiting: press STOP on the panel; `--slope fall` for an inverting DAC. Not part of `all` (not yet run live) |
+| `all` | Everything above except `volsweep` and `impulse`, in that order. Not every test runs at every `--fs`: `stability`, `zout`, `polarity`, `multitone`, `linearity`, `imdlevel` run at the first rate only; `jitter` and `jtest` at the rates ≤ 48 kHz; `interface` at 48 kHz (or the first rate). Uses −10 dBFS for `fr`, −1 for `fft`/images, −3 for `imd` |
 
 **Options.** General options go **before** the test name, and a test's own options go **after** it:
 `dac_test.py --port COM7 --fs 48000 fr --points 61`. `python measurements/dac_test.py --help` and

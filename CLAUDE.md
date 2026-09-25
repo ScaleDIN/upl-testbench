@@ -67,6 +67,36 @@ reading made `rec()` return no deviation and the `%+.2f` log line raised a TypeE
 command. It used to send `MMEM:DEL` straight after the slow `MMEM:LOAD:STAT`, the pattern that
 makes the PL2303 double a byte. None of this has been run on the instrument yet.
 
+## DAC impulse/step response, `dac_test.py impulse` (2026‑09‑25) — not yet run live
+
+Stimulus: one sample at `--imp-level` (−3 dBFS) every `--period` (10 ms). UPL source = ARB
+time-table file `C:\UPL\USER\IMP<n>.TTF` (uploaded, MD5-checked, like the J-test); PC source =
+looped buffer. Capture: **WAVEFORM** (`SENS1:FUNC 'WAV'`, `SENS:FUNC:MMOD STAN`, `SENS:WAV:DUR`,
+`TRIG:LEV`/`TRIG:SLOP`) on **A100**: 307.2 kHz sampling, 7488-sample memory (24.4 ms), flat far past
+any DAC filter; A22's own anti-alias filter would ring in the band being measured. Fixed range
+(autorange would size to the rms of a sparse impulse). Design points:
+- **WAVEFORM has no pre-trigger**, so each capture is 2 periods long and the PC keeps the impulse
+  with ±period/2 room on both sides: wherever the trigger fires, one complete impulse (pre-ringing
+  included) is in the capture. Trigger level is only 2 % of the expected peak for that reason.
+- Averaging: each window re-centred to a fraction of an analyzer sample (parabolic peak + FFT phase
+  shift), since the DAC and analyzer clocks are asynchronous.
+- **Classification by reach, not by pre-ringing peak:** time above −60 dB (or 4× the noise floor)
+  before vs after the peak; > 0.7 linear phase, < 0.25 minimum phase. The first version used the
+  pre-ringing peak and called a minimum-phase filter "intermediate" (its main lobe rises over
+  several samples).
+- A100 measures CH1 then CH2 → no L/R timing; the level trigger → no absolute latency.
+- **Hang risk:** a single WAVEFORM measurement waits for its trigger forever, and `*WAI` blocks the
+  parser, so a missed trigger can't be cancelled remotely → STOP on the panel. Hence not in `all`.
+- 6144 samples (20 ms) = exactly 6 blocks, so a 7th `TRAC?` comes back empty: `read_wave()` treats
+  that as the end (`read_fft` raises).
+
+Offline check against a modelled DAC (255-tap Kaiser FIR, cutoff 0.4535 fs; L plus a Q 1.5, 45 kHz
+analog section): ringing at 21 768 Hz = the cutoff, sidelobes −13.3 dB and symmetric (sinc), L +1.39 dB
+at 20 kHz (analytic +1.36), minimum-phase symmetry 0.08, inversion detected. Unverified until live:
+the WAV commands above, `DISP:TRAC:IND` paging a waveform, `TRAC? LIST1` as time in s, whether
+fixed ranges are peak or rms, and sample-exact ARB playback. Obvious first target: the Elektor DAC
+at 96 kHz, where L's suspected under-damped Bessel section should show as longer, larger ringing.
+
 ## Analog DUT suite, `measurements/analog_test.py` (2026‑09‑25) — not yet run live
 
 User asked for "something like the DAC suite, for analog — say, a preamp", and stressed that

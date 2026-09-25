@@ -48,6 +48,10 @@ Tests (subcommands), in the order worth running them:
   linearity  level error 0 to -130 dBFS, selective
   imdlevel   SMPTE and CCIF IMD vs level, -60 to 0 dBFS
   filter     white noise, wideband FFT: the reconstruction filter's shape
+  impulse    impulse and step response: a one-sample impulse every 10 ms, captured with
+             the UPL's WAVEFORM function on the 100 kHz analyzer (307.2 kHz sampling),
+             averaged on the PC. Filter type (linear/minimum phase, NOS), ringing,
+             polarity, and magnitude/phase response by FFT. Not part of `all`
  DUT control (--dut, optional):
   volsweep   THD+N/THD/level vs the DUT's own volume setting (not part of `all`)
   all        everything above, sensible defaults
@@ -211,7 +215,7 @@ TITLES = {
     "jitter": "Jitter transfer", "interface": "Interface robustness", "jtest": "J-test",
     "multitone": "Multitone", "linearity": "Linearity", "imdlevel": "IMD vs level",
     "filter": "Reconstruction filter (white noise)", "volsweep": "DUT volume sweep",
-    "setlevel": "Output level set by hand",
+    "setlevel": "Output level set by hand", "impulse": "Impulse and step response",
 }
 
 
@@ -330,6 +334,8 @@ def report_test(rep, name, header, rows):
                      + _lr(g, "volume_dB", "THD_L_dB", "THD_R_dB", "THD ", dash),
                      title=f"THD+N and THD vs DUT volume, {fs} Hz", xlabel="Volume (dB)", ylabel="dB")
         rep.table(header, rows)
+    elif name == "impulse":
+        report_impulse(rep, recs)
     elif name == "stability":
         lv = [q for q in recs if str(q["item"]).startswith("level_")]
         if lv:
@@ -684,6 +690,22 @@ class UPLSource:
         r.setc(f"SOUR:VOLT:TOT {peak:.12f} FS")
         self.twin_cur = None
 
+    def impulse(self, period, dbfs):
+        """One sample at dbfs, then period-1 zeros, looped: an ARB time-table file
+        (the ARB normalizes the file's largest value to SOUR:VOLT:TOT, so 1.0 = the
+        set peak). Like the J-test, sample-exact playback is from Vol.1 2.5.4.10
+        ("samples are output at the selected sampling rate"), not yet seen live."""
+        r = self.rig
+        body = "# impulse: 1 sample, then %d zeros\nTIMETAB_FILE\n1.0\n" % (period - 1)
+        body += "0\n" * (period - 1)
+        path = f"C:\\UPL\\USER\\IMP{period}.TTF"
+        r.upload(path, body.encode("ascii"))
+        r.setc(f"OUTP:AUD {r.args.bits}")
+        r.setc("SOUR:FUNC ARB", slow=True)
+        r.setc(f"MMEM:LOAD:LIST ARB,'{path}'", slow=True)
+        r.setc(f"SOUR:VOLT:TOT {lin(dbfs):.6g} FS")
+        self.twin_cur = None
+
     def noise(self, dbfs):
         r = self.rig
         r.setc("SOUR:FUNC RAND", slow=True)
@@ -853,6 +875,12 @@ class PCSource:
         tone = np.array([half, half, -half, -half] * 48, dtype=np.int64)
         tone[:96] += 1
         self.set_codes(np.column_stack([tone, tone]), f"J-test {bits}-bit", bits=bits)
+
+    def impulse(self, period, dbfs):
+        top = 2 ** (self.a.bits - 1) - 1
+        codes = np.zeros((period, 2), dtype=np.int64)
+        codes[0] = round(lin(dbfs) * top)
+        self.set_codes(codes, f"impulse {dbfs:+.1f} dBFS every {period} samples")
 
     def noise(self, dbfs):
         x = np.random.default_rng(1).standard_normal((2 * self.fs, 2))
@@ -1453,6 +1481,293 @@ def t_jtest(rig, a, fs, ctx):
     return rows
 
 
+A100_FS = 307200.0          # ANLG 110 kHz sampling rate (Vol.1 Table 2-27)
+WAV_DEPTH = 7488            # WAVEFORM memory depth, samples (Vol.1 2.6.5.14)
+RANGES = (0.018, 0.03, 0.06, 0.1, 0.18, 0.3, 0.6, 1, 1.8, 3, 6, 10, 18, 30, 60, 100)
+
+
+def read_wave(rig, sel):
+    """A WAVEFORM trace, paged like the FFT (TRAC? returns at most 1024 values;
+    DISP:TRAC:IND selects the block). Unlike read_fft, an empty or non-numeric
+    block ends it: 6144 samples (20 ms at 307.2 kHz) is exactly 6 full blocks."""
+    t, y = [], []
+    try:
+        for blk in range(8):
+            rig.w(f"DISP:TRAC:IND {blk}")
+            try:
+                yy = parse_values(rig.q(f"TRAC? {sel}"), sel)
+                xx = parse_values(rig.q("TRAC? LIST1"), "LIST1")
+            except ValueError:
+                break
+            n = min(len(xx), len(yy))
+            t += xx[:n]
+            y += yy[:n]
+            if n < 1024:
+                break
+    finally:
+        rig.w("DISP:TRAC:IND 0")
+    return t, y
+
+
+def imp_window(y, dt, period_s):
+    """The impulse fully inside a capture: +/- period/2 around the largest |sample|
+    that has that much room on both sides, re-centred to a fraction of a sample
+    (parabolic fit of |y| at the peak, then an FFT phase shift). A capture spans
+    two periods, so one such impulse is always there wherever the trigger fired."""
+    y = np.asarray(y, dtype=float)
+    half = int(round(period_s / 2 / dt))
+    if len(y) < 2 * half + 3:
+        return None
+    seg = np.abs(y[half:len(y) - half])
+    i = int(np.argmax(seg)) + half
+    w = y[i - half:i + half].copy()
+    a_, b_, c_ = abs(y[i - 1]), abs(y[i]), abs(y[i + 1])
+    den = a_ - 2 * b_ + c_
+    frac = 0.5 * (a_ - c_) / den if den else 0.0
+    k = np.fft.rfftfreq(len(w))
+    return np.fft.irfft(np.fft.rfft(w) * np.exp(2j * np.pi * k * frac), len(w))
+
+
+def imp_analyze(h, dt, fs):
+    """Figures from an averaged impulse h (peak at index len/2) sampled every dt."""
+    n = len(h)
+    c = n // 2
+    t = (np.arange(n) - c) * dt
+    pk = h[c]
+    out = {"peak_V": pk, "polarity": "normal" if pk > 0 else "INVERTED"}
+    hn = h / abs(pk)
+    floor = np.sqrt(np.mean(hn[-n // 8:] ** 2))               # tail = noise (+ AC-coupling tilt)
+    thr = max(1e-3, 4 * floor)                                # -60 dB or 4x the floor
+    edge = 1.5 / fs                                           # past the main lobe's first zeros
+    pre, post = np.abs(hn[t < -edge]), np.abs(hn[t > edge])
+    out["floor_dB"] = db(floor)
+    out["pre_dB"] = db(pre.max()) if len(pre) else None
+    out["post_dB"] = db(post.max()) if len(post) else None
+    above = np.nonzero(np.abs(hn) > thr)[0]
+    out["ring_thr_dB"] = db(thr)
+    out["ring_start_us"] = t[above[0]] * 1e6 if len(above) else None
+    out["ring_end_us"] = t[above[-1]] * 1e6 if len(above) else None
+    # how far it reaches before the peak vs after: ~1 linear phase, ~0 minimum phase.
+    # (pre_dB alone can't tell: a minimum-phase main lobe rises over several samples.)
+    s0, s1 = out["ring_start_us"], out["ring_end_us"]
+    sym = -s0 / s1 if s0 is not None and s1 and s1 > 0 else None
+    out["symmetry"] = sym
+    p, q = out["pre_dB"] or -200, out["post_dB"] or -200
+    if p < -40 and q < -40:
+        kind = "no ringing to speak of (NOS, or a slow roll-off filter)"
+    elif sym is not None and sym > 0.7:
+        kind = "linear phase (rings as long before the peak as after)"
+    elif sym is not None and sym < 0.25:
+        kind = "minimum phase (rings after the peak only)"
+    else:
+        kind = "intermediate phase (shorter ringing before the peak than after)"
+    out["type"] = kind
+    tail = hn[t > edge]                                       # ringing frequency
+    if len(tail) > 16:
+        spec = np.abs(np.fft.rfft(tail * np.hanning(len(tail)), 8 * len(tail)))
+        f = np.fft.rfftfreq(8 * len(tail), dt)
+        m = f > 1000
+        out["ring_Hz"] = float(f[m][np.argmax(spec[m])]) if m.any() else None
+    step = np.cumsum(h) * np.sign(pk)
+    final = np.mean(step[int(0.55 * n):int(0.6 * n)])         # 0.05-0.1 period after the edge
+    step = step / final if final else step
+    out["step"] = step
+    out["overshoot_pct"] = (step.max() - 1) * 100
+    out["preshoot_pct"] = -min(step[:c].min(), 0) * 100
+    i10, i90 = np.argmax(step >= 0.1), np.argmax(step >= 0.9)
+    out["rise_us"] = (i90 - i10) * dt * 1e6
+    H = np.fft.rfft(np.fft.ifftshift(h))                      # t = 0 at index 0: no linear phase
+    f = np.fft.rfftfreq(n, dt)
+    ref = abs(H[np.argmin(np.abs(f - 1000))])
+    out["f"], out["mag_dB"] = f, 20 * np.log10(np.maximum(np.abs(H), 1e-30) / ref)
+    out["phase_deg"] = np.degrees(np.unwrap(np.angle(H * np.sign(pk))))
+    i20 = np.argmin(np.abs(f - 20000))
+    out["fr20k_dB"] = float(out["mag_dB"][i20])
+    return t, out
+
+
+def t_impulse(rig, a, fs, ctx):
+    """Impulse and step response. The source plays one sample every --period; the
+    UPL's WAVEFORM function (100 kHz analyzer, 307.2 kHz sampling, 7488 samples)
+    records two periods per trigger, the PC keeps the impulse that fits with half a
+    period either side, aligns to a fraction of a sample and averages --avg captures.
+    A capture spans two periods, so where the trigger fires doesn't matter, and the
+    pre-ringing of a linear-phase filter is kept (the WAVEFORM has no pre-trigger).
+
+    Limits: A100 measures CH1 then CH2 (Vol.1 2.6.5.14), so L/R timing isn't
+    comparable, and the level trigger means no absolute latency. The analyzer's own
+    response is flat to ~110 kHz, well past any DAC's filter. From Vol.1/Vol.2
+    only, first live run will tell: SENS:WAV:DUR, TRIG:LEV/SLOP, the WAV trace
+    paging with DISP:TRAC:IND, TRAC? LIST1 as time, and fixed ranges being peak."""
+    log = rig.log
+    period = int(round(fs * a.period))
+    per_s = period / fs
+    dur = 2 * per_s
+    if dur * A100_FS > WAV_DEPTH:
+        per_s = WAV_DEPTH / A100_FS / 2.05
+        period = int(per_s * fs)
+        per_s = period / fs
+        dur = 2 * per_s
+        log(f"   --period too long for the {WAV_DEPTH}-sample memory: using {per_s * 1000:.2f} ms")
+    rig.configure(fs, "A100")
+    full = ctx.get("fullscale", {}).get(fs)
+    if not full or not all(full):
+        rig.src.sine()
+        rig.tone(997, -6.0)
+        time.sleep(a.settle)
+        (v1, _), (v2, _) = rig.measure("RMS")
+        full = tuple(2 * v if v else None for v in (v1, v2))
+    if not all(full) or max(full) < 1e-3:
+        log(f"   no output at -6 dBFS (L {fmt(full[0], '%.4f')} R {fmt(full[1], '%.4f')} V): "
+            "DAC not locked, muted, or not connected; skipped")
+        return []
+    expect = max(full) * math.sqrt(2) * lin(a.imp_level)      # impulse peak <= sample value, about
+    rng = next((r for r in RANGES if r >= 1.3 * expect), RANGES[-1])
+    trig = a.trig_frac * expect * (1 if a.slope == "rise" else -1)
+    log(f"   0 dBFS = {max(full):.3f} V rms -> expected impulse peak ~{expect:.3f} V; "
+        f"range {rng:g} V, trigger {trig * 1000:+.1f} mV {a.slope}")
+    rig.src.impulse(period, a.imp_level)
+    time.sleep(max(a.settle, 0.5))
+    rig.func("WAV")
+    rig.setc("SENS:FUNC:MMOD STAN")
+    rig.setc("SENS:SMO:APER N1", quiet=True)                  # no display interpolation
+    rig.setc(f"SENS:WAV:DUR {dur:.6f} S")
+    rig.setc("SENS:VOLT:RANG:AUTO OFF")                       # autorange would size it to the rms
+    rig.setc(f"SENS:VOLT:RANG {rng:g} V")
+    rig.setc(f"TRIG:LEV {trig:.6g} V")
+    rig.setc(f"TRIG:SLOP {'RIS' if a.slope == 'rise' else 'FALL'}")
+    for c in ("SENS:UNIT1 V", "SENS:UNIT2 V"):
+        rig.setc(c, quiet=True)
+    for c in ("FORM ASC", "DISP:TRAC:FEED 'SENS:DATA'", "DISP:TRAC2:FEED 'SENS:DATA2'"):
+        rig.setc(c)
+    wins = {"L": [], "R": []}
+    dt = 1 / A100_FS
+    try:
+        for k in range(a.avg):
+            rig.u.set_timeout(a.trig_timeout)
+            rig.w("INIT:CONT OFF;*WAI")
+            if rig.q("*OPC?").strip() != "1":
+                raise RuntimeError(
+                    f"no trigger within {a.trig_timeout:g} s. The UPL is still waiting for one and "
+                    "won't answer: press STOP on its front panel (or power-cycle), then check the "
+                    "DAC is locked and unmuted. An inverting DAC with no positive excursion needs "
+                    "--slope fall; a quiet one a lower --trig-frac.")
+            rig.u.set_timeout(a.timeout)
+            for ch, sel in (("L", "TRAC1"), ("R", "TRAC2")):
+                tx, y = read_wave(rig, sel)
+                if k == 0 and ch == "L" and len(tx) > 2:
+                    d = float(np.median(np.diff(tx)))
+                    if 1e-4 <= d < 0.1:                       # ms, not s
+                        d *= 1e-3
+                    if 1e-7 < d < 1e-4:
+                        dt = d
+                    log(f"   capture: {len(y)} samples, dt {dt * 1e6:.3f} us"
+                        f"{'' if abs(dt * A100_FS - 1) < 0.01 else '  (expected 3.255 us!)'}")
+                w = imp_window(y, dt, per_s)
+                if w is not None:
+                    wins[ch].append(w)
+    finally:
+        rig.u.set_timeout(a.timeout)
+        rig.setc("SENS:VOLT:RANG:AUTO ON", quiet=True)
+        rig.func("RMS")
+        rig.src.sine()
+    rows, res = [], {}
+    for ch in ("L", "R"):
+        ws = wins[ch]
+        if not ws:
+            log(f"   {ch}: no complete impulse in the captures (too short: is DISP:TRAC:IND paging "
+                "the waveform?)")
+            continue
+        n = min(len(w) for w in ws)
+        h = np.mean([w[:n] for w in ws], axis=0)
+        res[ch] = imp_analyze(h, dt, fs) + (h,)
+    if not res:
+        return []
+    for ch, (t, o, h) in res.items():
+        log(f"   {ch}: {o['type']}; peak {o['peak_V']:+.4f} V ({o['polarity']}), "
+            f"{len(wins[ch])} captures averaged")
+        log(f"      ringing: pre {fmt(o['pre_dB'], '%.1f')} / post {fmt(o['post_dB'], '%.1f')} dB re peak, "
+            f"symmetry {fmt(o['symmetry'], '%.2f')}, at ~{fmt(o.get('ring_Hz'), '%.0f')} Hz; "
+            f"above {o['ring_thr_dB']:.0f} dB from {fmt(o['ring_start_us'], '%.0f')} to "
+            f"{fmt(o['ring_end_us'], '%.0f')} us (floor {o['floor_dB']:.0f} dB)")
+        log(f"      step: rise 10-90 % {o['rise_us']:.1f} us, overshoot {o['overshoot_pct']:.1f} %, "
+            f"pre-shoot {o['preshoot_pct']:.1f} %; response at 20 kHz {o['fr20k_dB']:+.2f} dB re 1 kHz")
+    rig.spec("fr20k", fs)
+    if len(res) == 2:
+        dl = res["L"][1]["fr20k_dB"] - res["R"][1]["fr20k_dB"]
+        el = [res[c][1]["ring_end_us"] for c in ("L", "R")]
+        log(f"   L - R at 20 kHz {dl:+.2f} dB; ringing ends L {fmt(el[0], '%.0f')} / R {fmt(el[1], '%.0f')} us"
+            + ("   <- channels differ: compare the impulse plots" if abs(dl) > 0.3 or
+               (all(el) and abs(el[0] - el[1]) > 0.25 * max(el)) else ""))
+    chs = [c for c in ("L", "R") if c in res]
+
+    def get(c, arr, i):
+        return float(res[c][arr][i]) if c in res else None
+    t = res[chs[0]][0]
+    m = min(len(res[c][0]) for c in chs)
+    for i in range(m):
+        rows.append((fs, "impulse", round(t[i] * 1e6, 3),
+                     *(float(res[c][2][i]) if c in res else None for c in ("L", "R"))))
+        rows.append((fs, "step", round(t[i] * 1e6, 3),
+                     *(float(res[c][1]["step"][i]) if c in res else None for c in ("L", "R"))))
+    f = res[chs[0]][1]["f"]
+    for i in range(1, len(f)):
+        if f[i] > min(0.5 * fs, 110000):
+            break
+        rows.append((fs, "mag_dB", round(float(f[i]), 2),
+                     *(float(res[c][1]["mag_dB"][i]) if c in res else None for c in ("L", "R"))))
+        rows.append((fs, "phase_deg", round(float(f[i]), 2),       # stopband phase is just noise
+                     *(float(res[c][1]["phase_deg"][i])
+                       if c in res and res[c][1]["mag_dB"][i] > -20 else None for c in ("L", "R"))))
+    for key in ("type", "polarity", "peak_V", "pre_dB", "post_dB", "symmetry", "ring_Hz",
+                "ring_start_us", "ring_end_us", "floor_dB", "rise_us", "overshoot_pct",
+                "preshoot_pct", "fr20k_dB"):
+        rows.append((fs, "summary", key, *(res[c][1].get(key) if c in res else None for c in ("L", "R"))))
+    rows.append((fs, "summary", "captures", *(len(wins[c]) for c in ("L", "R"))))
+    return rows
+
+
+def report_impulse(rep, recs):
+    for (fs,), g in _groups(recs, "fs").items():
+        fs_i = int(float(fs))
+        kinds = _groups(g, "kind")
+        imp = kinds.get(("impulse",), [])
+        if imp:
+            pk = max(abs(_f(q[c])) for q in imp for c in ("L", "R") if not math.isnan(_f(q[c])))
+            span = 25e6 / fs_i                                  # +/- 25 DAC samples, in us
+            near = [q for q in imp if abs(_f(q["x"])) <= span]
+            norm = [dict(q, L=_f(q["L"]) / pk, R=_f(q["R"]) / pk) for q in near]
+            rep.plot(f"impulse_{fs}", _lr(norm, "x", "L", "R"),
+                     title=f"Impulse response, {fs} Hz (±25 samples; the larger channel's peak = 1)",
+                     xlabel="Time (µs)", ylabel="Relative to peak", markers=False,
+                     hlines=[(0, None)])
+            env = [dict(q, L=db(abs(_f(q["L"])), pk), R=db(abs(_f(q["R"])), pk)) for q in imp]
+            rep.plot(f"impulse_env_{fs}", _lr(env, "x", "L", "R", style={"linewidth": 0.8}),
+                     title=f"Impulse, {fs} Hz, dB re peak: how long it rings, and the noise floor",
+                     xlabel="Time (µs)", ylabel="dB re peak", markers=False, ylim=(-120, 5))
+        st = [q for q in kinds.get(("step",), []) if abs(_f(q["x"])) <= 25e6 / fs_i]
+        if st:
+            rep.plot(f"step_{fs}", _lr(st, "x", "L", "R"),
+                     title=f"Step response, {fs} Hz (integrated impulse, settled value = 1)",
+                     xlabel="Time (µs)", ylabel="Relative", markers=False, hlines=[(1, None), (0, None)])
+        mg = kinds.get(("mag_dB",), [])
+        if mg:
+            rep.plot(f"imp_fr_{fs}", _lr(mg, "x", "L", "R"),
+                     title=f"Frequency response from the impulse, {fs} Hz",
+                     xlabel="Frequency (Hz)", ylabel="dB re 1 kHz", logx=True, markers=False,
+                     ylim=(max(-60, min(min(_f(q["L"]), _f(q["R"])) for q in mg) - 3),
+                           max(3, max(max(_f(q["L"]), _f(q["R"])) for q in mg) + 2)))
+        ph = kinds.get(("phase_deg",), [])
+        if ph:
+            rep.plot(f"imp_phase_{fs}", _lr(ph, "x", "L", "R"),
+                     title=f"Phase re the impulse peak, {fs} Hz (0 = linear phase; shown down to -20 dB)",
+                     xlabel="Frequency (Hz)", ylabel="Degrees", logx=True, markers=False, height=3.2)
+        sm = kinds.get(("summary",), [])
+        if sm:
+            rep.table(["measurement", "L", "R"], [(q["x"], q["L"], q["R"]) for q in sm],
+                      title=f"Summary, {fs} Hz")
+
+
 def t_multitone(rig, a, fs, ctx):
     """17-tone multisine (the UPL's maximum; ASR uses 32), log-spaced 20 Hz-20 kHz,
     tones snapped to FFT bins (spacing ATRack) so no window leakage. Everything
@@ -1728,6 +2043,7 @@ TESTS = {
     "linearity": (t_linearity, ["fs", "set_dBFS", "L_V", "R_V", "L_err_dB", "R_err_dB"]),
     "imdlevel":  (t_imd_level, ["fs", "test", "level_dBFS", "L_dB", "R_dB"]),
     "filter":    (t_filter, ["fs", "freq_Hz", "level_V"]),
+    "impulse":   (t_impulse, ["fs", "kind", "x", "L", "R"]),
     "volsweep":  (t_volsweep, ["fs", "volume_dB", "L_V", "R_V", "THDN_L_dB", "THDN_R_dB",
                                "THD_L_dB", "THD_R_dB"]),
 }
@@ -1840,6 +2156,18 @@ def main():
     s.add_argument("--fft-avg", type=int, default=4)
     s = sub.add_parser("filter")
     s.add_argument("--fft-avg", type=int, default=16)
+    s = sub.add_parser("impulse", help="impulse/step response (WAVEFORM on the 100 kHz analyzer)")
+    s.add_argument("--period", type=float, default=0.01,
+                   help="impulse spacing, s (the analysis window; 10 ms = 100 Hz FFT resolution)")
+    s.add_argument("--imp-level", type=float, default=-3.0,
+                   help="impulse height, dBFS (-3: some DACs' output stages clip near 0 dBFS)")
+    s.add_argument("--avg", type=int, default=8, help="captures averaged per channel")
+    s.add_argument("--trig-frac", type=float, default=0.02,
+                   help="trigger level, fraction of the expected impulse peak")
+    s.add_argument("--slope", choices=("rise", "fall"), default="rise",
+                   help="trigger slope; 'fall' for an inverting DAC with no positive excursion")
+    s.add_argument("--trig-timeout", type=float, default=20.0,
+                   help="seconds to wait for a trigger before giving up")
     s = sub.add_parser("fr")
     s.add_argument("--start", type=float, default=10.0)
     s.add_argument("--stop", type=float, help="default 20 kHz (or 0.45*fs with --wide)")
