@@ -347,6 +347,56 @@ python measurements/dac_test.py --port COM7 --source pc --device 16 --fs 44100,9
 | `linearity` | Level error 0 to −130 dBFS, 1 % selective; reports how far down it stays within 0.1 dB |
 | `imdlevel` | SMPTE and CCIF IMD vs level, −60 to 0 dBFS |
 | `filter` | White noise through the DAC, wideband FFT — the reconstruction filter's shape and image-band leakage |
+| `volsweep` | THD+N, THD and level vs the DUT's own volume setting. Needs `--dut`; not part of `all` |
+| `all` | Everything above except `volsweep`, in that order. Not every test runs at every `--fs`: `stability`, `zout`, `polarity`, `multitone`, `linearity`, `imdlevel` run at the first rate only; `jitter` and `jtest` at the rates ≤ 48 kHz; `interface` at 48 kHz (or the first rate). Uses −10 dBFS for `fr`, −1 for `fft`/images, −3 for `imd` |
+
+**Options.** General options go **before** the test name, and a test's own options go **after** it:
+`dac_test.py --port COM7 --fs 48000 fr --points 61`. `python measurements/dac_test.py --help` and
+`... <test> --help` list them too.
+
+| General option | Default | Does |
+|---|---|---|
+| `--port` | — | UPL: `COMn` or `GPIB0::20::INSTR` (not needed with `--dry-run`) |
+| `--baud`, `--timeout` | 115200, 30 s | serial speed; per-reply timeout |
+| `--dry-run` | | no instrument; prints the SCPI, canned replies |
+| `--source upl\|pc` | `upl` | signal source (see above) |
+| `--device N` | | `--source pc`: output device index (`upacd_test.py devices`) |
+| `--shared` | | `--source pc`: allow Windows shared mode (resampled, results suspect) |
+| `--fs` | `44100,48000,88200,96000` | comma-separated sample rates to test at. `--source upl` accepts only these four; with `--source pc`, any rate the device takes |
+| `--bits` | 24 | word length sent to the DAC (`OUTP:AUD`) |
+| `--settle` | 0.3 s | wait after each generator change (use ~0.5–0.6 with `--source pc`) |
+| `--relock` | 2.0 s | wait for the DAC to relock after a rate change |
+| `--ground` | | `INP:LOW GRO` instead of `FLOat` |
+| `--stepped` | | `fr`/`thdn`: step the frequency from the PC instead of the UPL's native sweep |
+| `--preserve`, `--state-file` | | snapshot the UPL setup first and restore it at the end (`MMEM:STOR:STAT 2`) |
+| `--no-reset` | | skip the initial `*RST` |
+| `--stay-remote` | | leave the UPL in REMOTE (default: hand the front panel back at the end) |
+| `--dut NAME`, `--dut-port`, `--volume dB` | port COM2 | control a supported DUT (see above); `--volume` needs `--dut` |
+| `--dut-spec NAME\|FILE` | | print a DUT's published figures next to each result |
+| `--label`, `--outdir` | `dac` | where results go (see [Where results go](#where-results-go)) |
+
+| Test | Its options (defaults) |
+|---|---|
+| `fr` | `--start 10` `--stop` (20 kHz, or 0.45·fs with `--wide`) `--points 31` `--level -10` dBFS `--repeat 2` `--wide` (to 0.45·fs on the 100 kHz analyzer) |
+| `thdn` | `--analyzer A22` (`A100`, or `A22,A100`) `--freq-level -1` (dBFS for the vs-frequency sweep) |
+| `fft` | `--freq 997` `--level -1` `--analyzer A22` `--images` `--image-freq` (default 19 kHz) `--fft-avg 4` |
+| `imd` | `--level -3` `--imd-fft` (also FFT the CCIF signal for aliases) `--fft-avg 4` |
+| `jitter` | `--ui 0.1` (max 0.25) `--jfreqs 100,300,1000,2000,5000,8000` `--cable` `--fft-avg 4` |
+| `jtest` | `--jbits 24,16` `--fft-avg 4` |
+| `multitone` | `--mt-level -1` (total peak, dBFS) `--fft-avg 4` |
+| `filter` | `--fft-avg 16` |
+| `stability` | `--readings 20` `--monitor 0` (seconds of live L/R level streaming afterwards) |
+| `volsweep` | `--volumes -20,-15,-10,-6,-3,-1,0,1,3,6,10` `--level -1` |
+
+`check`, `xtalk`, `zout`, `polarity`, `interface`, `linearity`, `imdlevel` and `all` take no
+options of their own; `all` uses the defaults above for every test.
+
+**Response above 20 kHz:** `fr --wide`, or `fr --stop <Hz>`. A stop above 21 kHz switches to the
+100 kHz analyzer (A100) by itself. The sample rate sets the ceiling: a DAC can't output anything
+above fs/2, so at 44.1/48 kHz `--wide` only reaches 19.8/21.6 kHz. Use `--fs 88200,96000` (to
+39.7/43.2 kHz), or `--source pc` at 192 kHz (to ~86 kHz). A100 can't make the selective reading
+below ~60 Hz and is about 3× noisier than A22, so run a normal `fr` too for the bottom of the
+range. For the stopband and images above fs/2, use `filter` or `fft --images`, not a sweep.
 
 The test is the same for every DAC. Optionally, `--dut-spec <name>` prints a DUT's published
 figures under each result, from `measurements/dut_specs/<name>.json` (format in that folder's
