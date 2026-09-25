@@ -403,12 +403,21 @@ samples with dither off, so it reaches the DAC bit-exact. For that to hold:
   stream (check what the DAC says it's locked to);
 - give it `--settle 0.5`–`0.6`: a new tone only arrives after the audio buffer and the DAC's own
   latency.
+- some drivers refuse exclusive mode at some rates unless the buffer size suits them, and
+  PortAudio reports that as a misleading **`Invalid device [PaErrorCode -9996]`** even though the
+  device number is right. The script retries at 50 ms latency, which fixed the laptop's Realtek
+  output at 44.1/88.2 kHz. If a device still fails that way, check the rate with
+  `python -c "import sounddevice as sd; sd.check_output_settings(device=N, samplerate=44100, extra_settings=sd.WasapiSettings(exclusive=True))"`.
+- the level at 0 dBFS depends on the device's own volume: exclusive mode skips the Windows mixer, but
+  the codec's volume control can still act. Set it to 100 % before measuring. (The laptop's headphone
+  output gave only ~85 mV at 0 dBFS with its volume turned down.)
 
 What it can't do: the UPL's analyzer can't track a PC's generator, so selective measurements use a
 bandpass the script moves to each tone (same results, set differently). `jitter`, `interface` and
 `polarity` need the UPL's digital generator and are skipped. With a USB→S/PDIF interface, the
 interface's own clock jitter is part of every result, and nothing here can separate it from the
-DAC's. **`--source pc` is written and tested offline but not yet run live.**
+DAC's. **`--source pc` has been run live only as far as `check`**, on the laptop's own headphone
+output (2026‑09‑25/26); the other tests haven't been run from the PC yet.
 
 **The UPL source (`--source upl`, needs B2 or B29)** is bit-exact too, and the UPL sets the sample
 rate. It can also degrade the interface on purpose: jitter (with UPL‑B22), a 100 m cable
@@ -638,7 +647,7 @@ leaves the analyzer's THD+N floor ~6 dB worse until a native RMS sweep or a powe
 `thdn` clears it itself; if THD+N readings elsewhere look ~6 dB high, that's the cause. `thdn`'s
 `STILL LATCHED?` warning fires whenever the reset check reads above −106 dB, so on a DAC whose
 own THD+N is worse than that (e.g. −84 dB) it's a false alarm.
-**Not yet run live:** `--source pc` (USB DACs), `--dut` / `--volume`, and `volsweep`.
+**Not yet run live:** `--source pc` beyond `check`, `--dut` / `--volume`, and `volsweep`.
 
 ### Analog DUT characterization: preamps and friends (`measurements/analog_test.py`)
 

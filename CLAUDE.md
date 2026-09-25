@@ -67,6 +67,28 @@ reading made `rec()` return no deviation and the `%+.2f` log line raised a TypeE
 command. It used to send `MMEM:DEL` straight after the slow `MMEM:LOAD:STAT`, the pattern that
 makes the PL2303 double a byte. None of this has been run on the instrument yet.
 
+## `dac_test.py --source pc`: first live run, the laptop's headphone out (2026‑09‑25, 23:37)
+
+`--port GPIB::20::INSTR --source pc --device 10 --settle 0.6 check` (device 10 = "Headphones
+(Realtek(R) Audio)", WASAPI) died at 44.1k with `PortAudioError: Invalid device [-9996]`. The UPL
+was fine. **The device number was right, so the error text was misleading.** Isolated it:
+- A blocking-mode exclusive stream opens at every rate; a **callback** stream (what the script uses)
+  fails at 44.1/88.2k. `check_output_settings` says OK, so it can't be used to catch this.
+- Latency scan (callback, exclusive, int32): 48/96k open at any latency; 44.1k opens **only at
+  0.05 s** (60 ms actual), and 88.2k only at 0.02 and 0.05 s. It looks like the Realtek driver
+  rejecting a buffer size it doesn't like at the 44.1k family (in exclusive event mode Windows
+  wants aligned buffers), with PortAudio translating that as "invalid device".
+- Shared mode on this device only takes 96k (its mix format), so `--shared` is no way out.
+
+**Fix (commit 38162d2):** `PCSource.configure()` retries the open with `latency=0.05` when the
+default fails. Latency doesn't matter for steady tones. After the fix, `check` ran at all four
+rates: lock at 997.0 Hz (997.08 at 44.1k), L−R −0.054 dB, DC ≤ 0.1 mV, **but only 81–99 mV at
+0 dBFS**, varying ~1.7 dB with rate. That points to the codec's volume being well below maximum:
+exclusive mode skips the Windows mixer, but not the endpoint's hardware volume. Set it to 100 % and
+turn off "enhancements" before `fr`/`thdn`, or the noise figures will be ~20 dB pessimistic.
+Results: `results/dac/dac_20260925-233747/`. `upacd_test.py` also uses exclusive WASAPI but not the
+same callback stream; not checked.
+
 ## DAC impulse/step response, `dac_test.py impulse` (2026‑09‑25) — first live run 22:28, see end
 
 Stimulus: one sample at `--imp-level` (−3 dBFS) every `--period` (10 ms). UPL source = ARB
