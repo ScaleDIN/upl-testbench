@@ -1,6 +1,8 @@
-# R&S proprietary firmware -- not ours to redistribute
-/DISK1/
-/DISK2/
+# R&S proprietary firmware -- not ours to redistribute (only the placeholder READMEs are tracked)
+/DISK1/*
+!/DISK1/README.md
+/DISK2/*
+!/DISK2/README.md
 /UPL_306.EXE
 /ReadMe.txt
 
@@ -20,3 +22,9 @@
 # python
 __pycache__/
 *.pyc
+
+# third-party manuals, app notes, test disc, option data, DUT docs -- see external/README.md.
+# Only the placeholder READMEs are tracked.
+/external/**
+!/external/**/
+!/external/**/README.md

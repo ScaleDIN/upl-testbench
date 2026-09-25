@@ -290,7 +290,7 @@ The CPU board is the **least R&S‑proprietary part** and is replaceable from th
   maps that to `BOARD` (486→`UM486`, 586→`UM586`, else `SX386`). No dongle, no board‑ID handshake.
 - **Original boards:** an **AI5VG+** (half‑size Socket‑7 PICMG SBC, onboard VGA) *or* a **Kontron
   Geode GX1** module on a carrier. Both 586‑class → firmware sees `UM586`.
-- **Board history, from Service Manual Vol.2 (2026‑09‑23, shared Drive archive).** The parts list
+- **Board history, from Service Manual Vol.2 (2026‑09‑23, diyAudio community archive).** The parts list
   of the UPL mainframe (1078.2008) shows the *earlier* generations:
   **MOD 02 (monochrome LCD) — 386DX40 mainboard, Shuttle 327**; **MOD 05 (colour LCD) — 486 AT
   board, ABIT AH4T**. Models 06/66 are the Pentium (586) units (Vol.1's 16‑bit-WAV note). This
@@ -387,7 +387,7 @@ The CPU board is the **least R&S‑proprietary part** and is replaceable from th
      the Renata CR2477N on the carrier.
   4. **The CompactFlash socket:** empty in this photo. Check whether the UPL boots from a CF card
      here or from the mainframe's IDE disk — it decides what "image the boot disk" means. The
-     shared Drive archive has a "CompactFlash Card" photo folder suggesting another owner moved to
+     diyAudio community archive has a "CompactFlash Card" photo folder suggesting another owner moved to
      CF; the on-module socket would make that straightforward.
 - **R&S's own statement on repairability** (Service Manual Vol.2 contents page): *"All modules not
   listed above are no R&S developments but parts from subsuppliers… repair down to component level
@@ -563,7 +563,7 @@ Software (user has ALL software options):
   pre-coded WAV files — it does not decode or analyze them. **Formats: AC‑3 and DTS; no MPEG.**
   (A same-day follow-up correction: this line briefly said "AC‑3 only, no DTS", following the
   operating manual's "other formats are in preparation". The later R&S B23/UPZ datasheet, v02.00
-  January 2004, from the shared Drive archive, says DTS *is* supported — 192 kbit/s stereo,
+  January 2004, from the diyAudio community archive, says DTS *is* supported — 192 kbit/s stereo,
   754 kbit/s 5.1 and single-channel — plus special signals: AC‑3 dialog-normalization files and
   AC‑3/DTS full-scale files. The manual text simply predates it. **But the B23 library we actually
   have contains AC‑3 files only** (`CODED/AC3/48000/…`), so in practice this unit can generate DTS
@@ -723,7 +723,7 @@ option tokens, which is now identified above — previously flagged as unknown.)
   100 Hz, +1.8 at 2–3 kHz, −7.5 at 15–18 kHz vs unfiltered); a user bandpass
   (`SENS:UFIL2:BPAS ON; …:PASS:LOW 1000 HZ; …:PASS:UPP 5000 HZ; SENS:FILT1:UFIL2 ON`) was flat
   1–5 kHz and 50–65 dB down outside. `CALC:TRAN:FREQ:AVER 16` averaging accepted.
-  Manuals: `R&S_UPL_Audio_Analyzer_Op_Vol_1.pdf` / `_Vol_2.pdf` one level up from this folder.
+  Manuals: `R&S_UPL_Audio_Analyzer_Op_Vol_1.pdf` / `_Vol_2.pdf` in `external/manuals/`.
   Vol 2 = remote/IEC‑bus command reference (confirmed).
   Extract text for searching with `pdftotext -layout <file> out.txt` (available in this env).
 - Unrecognized *query* names cause a read timeout (no reply); unrecognized *set* commands just queue an
@@ -759,7 +759,7 @@ option tokens, which is now identified above — previously flagged as unknown.)
 
 ## UPL→PC file transfer: the real R&S mechanism (App Note 1GA42_0E)
 
-Source: `Application Notes/1GA42_0E_...RS-232-C Interface.pdf` (one dir up from this project).
+Source: `external/application-notes/1GA42_0E_...RS-232-C Interface.pdf`.
 Utilities `SNDFILE.BAS`, `SER_IN.EXE`, `DRV_INST.BAS` are already present in the firmware's
 `DISK2/USER/` (so should already be at `C:\UPL\USER` on the real instrument). Requires **UPL‑B4**
 and **UPL‑B10** (user has both).
@@ -854,7 +854,7 @@ Subcommands: `devices`, `selftest`, `analyze <wav>`, `noise`, `tone`, `loopback`
 
 ## R&S factory Selftest program (added 2026‑09‑22) — major SCPI reference
 
-`SELFTEST_Program.TXT` (user-supplied, one directory up from this project) is a genuine R&S
+`SELFTEST_Program.TXT` (user-supplied, in `external/selftest-program/`) is a genuine R&S
 factory selftest, written in the UPL's own on-board BASIC (runs locally: `UPL OUT "cmd"` /
 `UPL IN var$` address the instrument's own SCPI parser directly, no `IEC OUT <addr>,` needed).
 Exercises generator ranges, low-dist gen accuracy, analyzer ranges (18mV–100V @ 1k/40Hz/15kHz),
@@ -1546,7 +1546,7 @@ a UPL frequency-response sweep at each to verify actual filter slopes match clai
 
 ## Full factory selftest, replicated via remote SCPI, with real values (2026‑09‑22)
 
-Replicated `SELFTEST_Program.TXT` (R&S factory selftest, user-supplied, one directory up from
+Replicated `SELFTEST_Program.TXT` (R&S factory selftest, user-supplied, in `external/selftest-program/`,
 this project — untouched, never modified) command-for-command via remote SCPI from this PC —
 the front-panel version only shows pass/fail; this captures
 every underlying number. **Permanent tool: `upl_selftest.py`** (in this project folder, alongside
@@ -1582,7 +1582,7 @@ set via the OPTIONS panel — the remote SCPI baud-set command may also accept i
 manual's printed table, untested remotely, but the front-panel route is confirmed working).
 
 **B21 identified (from user-supplied brochure, `R&S_UPL_Audio_Analyzer__Data_and_Spec_Sheets.pdf`,
-one dir up):** **UPL‑B21 = Digital Audio Protocol** — in-depth AES3/S-PDIF protocol analysis and
+in `external/manuals/`):** **UPL‑B21 = Digital Audio Protocol** — in-depth AES3/S-PDIF protocol analysis and
 *generation*, extending options B2/B29. Confirmed from clear prose (not the brochure's ordering
 table, whose columns are scrambled/row-shifted by PDF extraction — labels and part numbers don't
 line up; don't trust that table for anything not already cross-confirmed elsewhere). This is
@@ -1611,7 +1611,7 @@ next live session and keep whichever is literal.)
 | THD+N −60dB linearity (2-tone) | −60.14/−60.17 dB | ±0.5 dB | good |
 | Inherent THD+N @1kHz/2V, A100 | −97.7 to −97.9 dB | ≤−84 dB | ~14 dB |
 | Inherent D2 (DFD) @10kHz/200Hz/2V | −120.5 to −131.3 dB | ≤−110 dB | wide |
-| Inherent noise, A22 | 1.5–1.6 µV | ≤2 µV | tight-ish but PASS — normal for the model; a second unit reads 1.4/1.6 µV (see "Shared Drive archive") |
+| Inherent noise, A22 | 1.5–1.6 µV | ≤2 µV | tight-ish but PASS — normal for the model; a second unit reads 1.4/1.6 µV (see "Community archive, diyAudio") |
 | Inherent noise, A100 | 4.3–5.2 µV | ≤8 µV | comfortable |
 | Digital audio (B29) level/freq | −0.002% / exact | 0.1% / 0.01% | excellent |
 
@@ -1730,16 +1730,16 @@ commands now confirmed in shipped firmware. `--setup` was added to `nsweep` for 
 - `INIT:CONT OFF;*WAI` as the single-sweep trigger — a third independent confirmation, now also
   from R&S's own shipped firmware rather than an app note.
 
-## Shared Drive archive (reviewed 2026‑09‑23)
+## Community archive, diyAudio (reviewed 2026‑09‑23)
 
-Google Drive folder `1gu6kGuI8oiFmsxlREX8HwBPrEix0Lwos`, **owned by another UPL owner**
-(bartvandekeere@gmail.com), shared with the user. Read through the Drive connector. Most of what
-this project already uses came from here (app notes, operating manual, 3.06 firmware, B23 library,
+A Google Drive archive of UPL material shared by another UPL owner through the diyAudio thread
+[*Rohde & Schwarz R&S UPL audio analyzer renovation*](https://www.diyaudio.com/community/threads/rohde-schwarz-r-s-upl-audio-analyzer-renovation.353461/).
+Read through the Drive connector. Most of what this project already uses came from here (app notes, operating manual, 3.06 firmware, B23 library,
 UPA-CD). New material, by value:
 
 | Item | Drive location | Why it matters |
 |---|---|---|
-| **Service Manual Vol.2** (28 MB) | Documents/Service Manual/UPL/Bart's Version | Circuit diagrams, component plans and parts lists for the Digital Board, Analog Unit, Power Supply, B1, B2, B5, plus B4/B10/B21/B22 install instructions. Answers the CPU-board history — see the CPU-longevity section. |
+| **Service Manual Vol.2** (28 MB) | Documents/Service Manual/UPL | Circuit diagrams, component plans and parts lists for the Digital Board, Analog Unit, Power Supply, B1, B2, B5, plus B4/B10/B21/B22 install instructions. Answers the CPU-board history — see the CPU-longevity section. |
 | **UPL‑B23 + UPZ datasheet** (v02.00, Jan 2004) | Documents/Option Manual | DTS support, special signals, UPZ switcher. Corrected the B23 entry above. |
 | **Second unit's selftest report** | Documents/Selftest Program/SELFTEST.TXT | A reference baseline from another UPL — see below. |
 | **Service Manual UPL‑B1** | same folder as Vol.2 | Install sheet + B1 calibration procedure (below), then schematics/parts. |
@@ -1751,9 +1751,6 @@ Folders that came back **empty through the connector**: `Software/EEPROM/UPL_EEP
 or holding file types the connector doesn't list — check in a browser before concluding either.
 The EEPROM folder is worth that check: the digital board carries a **Xicor X24164 serial EEPROM**
 (Service Manual Vol.2 parts list), a plausible home for per-board calibration.
-
-**Deliberately not examined:** a top-level `Keygen` folder. This unit already has every option it
-needs fitted (`*OPT?`), so there's no reason to go near an option-unlock tool.
 
 ### Second-unit selftest baseline (serial 828288/2, 2025‑01‑05)
 
@@ -1782,7 +1779,7 @@ number to watch across future selftests.
 
 Sources: R&S *Service Manual UPL‑B1* (board **1031.2699**, drawn 1993, originally for the UPD —
 title block says "UPD‑B1"), and **github.com/bvksound/UPL-B1**, a KiCad 9 re-creation by BVKSound
-(the same person behind the shared Drive archive and the B23 repack). The repo carries an
+(also behind the B23 repack). The repo carries an
 identical copy of the R&S manual (same 2,098,935-byte file).
 
 **How it works** (from R&S's drawings; KiCad part names in brackets):
@@ -1856,8 +1853,8 @@ multichannel DUT (an AV receiver for B23 testing) turns up, but it's the intende
 
 ## UPA-CD Audio Test Disc + UPL‑B23 coded audio (added by user 2026‑09‑23)
 
-Two archives dropped in the parent folder, both unpacked and analysed. Neither is in git — they're
-large and not ours to redistribute (add to `.gitignore` if they ever move into this folder).
+Two archives, both unpacked and analysed, now in `external/upa-cd/` and `external/b23-coded-audio/`
+(moved there 2026‑09‑25). Neither is in git — they're large and not ours to redistribute.
 
 ### UPA-CD (Audio Test Disc UPA‑CD 852.8400.02)
 
@@ -2095,7 +2092,7 @@ AES3 protocol config, and `MMEM:LOAD:STAT 4,'x.PCX'` to throw an image on the sc
 
 ## Application Notes catalog (digested 2026‑09‑22)
 
-Folder: `Application Notes/` (one dir up from this project, alongside the manuals). 14 PDFs +
+Folder: `external/application-notes/` (moved there from one level up on 2026‑09‑25). 14 PDFs +
 bundled DOS example programs. Most PDFs are usage/install docs for their bundled compiled `.exe`
 programs (source not printed in the PDF), so SCPI yield from text-grepping them was modest —
 cataloged here by topic so they're easy to pull up again if a specific need matches:
@@ -2103,11 +2100,11 @@ cataloged here by topic so they're easy to pull up again if a specific need matc
 **CORRECTION 2026‑09‑23 — the app-note `.exe` files are self-extracting ZIPs, and they contain the
 full BASIC source.** `unzip` opens them directly (the ones that don't are plain DOS binaries):
 ```
-unzip -o "Application Notes/1ga16_1l_.../1ga16_1l.exe" -d out/     # SPEAKER/SOUND/IMPEDANC/PHASE/THD .BAS + .ASC
-unzip -o "Application Notes/1GA21_1E_.../1GA21_1E.exe" -d out/     # CDPlayer/CDTEST.BAS + 12 .SAC setups
-unzip -o "Application Notes/1GA24_1E_.../1GA24_1E.exe" -d out/     # Tuner/TUNTEST.BAS, SETUP.BAS + .SAC
-unzip -o "Application Notes/1GA30_0E_.../1GA30_0E.exe" -d out/     # Adctest.bas + Ad_*.sac
-unzip -o "Application Notes/1GA33_1L_.../1ga33_1l.exe" -d out/     # LIMIT.BAS
+unzip -o "external/application-notes/1ga16_1l_.../1ga16_1l.exe" -d out/     # SPEAKER/SOUND/IMPEDANC/PHASE/THD .BAS + .ASC
+unzip -o "external/application-notes/1GA21_1E_.../1GA21_1E.exe" -d out/     # CDPlayer/CDTEST.BAS + 12 .SAC setups
+unzip -o "external/application-notes/1GA24_1E_.../1GA24_1E.exe" -d out/     # Tuner/TUNTEST.BAS, SETUP.BAS + .SAC
+unzip -o "external/application-notes/1GA30_0E_.../1GA30_0E.exe" -d out/     # Adctest.bas + Ad_*.sac
+unzip -o "external/application-notes/1GA33_1L_.../1ga33_1l.exe" -d out/     # LIMIT.BAS
 ```
 `.ASC` = plain-text BASIC listing; `.BAS` = tokenized (still ~90% readable — map non-printable
 bytes to newlines in Python to dump the string literals). This is by far the richest confirmed-SCPI
@@ -2121,7 +2118,7 @@ Two other archives nest further: `1ga36_1l.exe` → `MAKEDISK.LZH` (+ `LHA.EXE`)
 - **1GA42_0E** — UPL→PC file transfer via RS232. **Fully digested above** (SNDFILE/SER_IN/ser_in.py).
 - **1GA36_1L** — Collection of ready-made `.SAC` setup files, incl. **jitter** (`JITAM/JITSP/JITSU/
   JITWA_DD.SAC`) and **protocol** (`PROTB/PROTC/PROTP_DD.SAC`) setups — directly relevant to B22/B23,
-  not yet loaded/tried live. Path: `Application Notes/1GA36_1L_Collection_Of_Setups.../
+  not yet loaded/tried live. Path: `external/application-notes/1GA36_1L_Collection_Of_Setups.../
   Rohde&Schwarz_Library/`.
 - **1GA15_1L** — Protocol Analysis at Digital Interfaces (AES3/S-PDIF). Background/theory on the
   AES3 subframe format (channel status bit, user bit, validity/parity) — pairs with the PROT*_DD.SAC
@@ -2158,11 +2155,11 @@ Two other archives nest further: `1ga36_1l.exe` → `MAKEDISK.LZH` (+ `LHA.EXE`)
 
 ## Manuals (added 2026‑09‑22)
 
-User placed the official operating manuals **one directory up** from this project folder:
-`R&S_UPL_Audio_Analyzer_Op_Vol_1.pdf` and `..._Vol_2.pdf`.
+The official operating manuals, `R&S_UPL_Audio_Analyzer_Op_Vol_1.pdf` and `..._Vol_2.pdf`, are in
+**`external/manuals/`** (moved there 2026‑09‑25 from one directory up; `vol1.txt`/`vol2.txt` there
+are their `pdftotext` output).
 **Vol 2 = the IEC‑bus/remote SCPI command reference** — use it to verify command syntax instead
-of blind live probing. Working directory was moved up to that parent folder
-(via change_directory) so both the manuals and `UPL_3.06/` (tools, CLAUDE.md) are reachable.
+of blind live probing.
 
 ## Internal loopback self-test results (2026‑09‑22, all via upl_capture.py's UPL class over COM2)
 

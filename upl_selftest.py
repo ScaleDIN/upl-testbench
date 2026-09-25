@@ -5,7 +5,7 @@ run from a PC over the RS232 remote-control link, reporting every underlying mea
 (the front-panel BASIC version only shows a PASS/FAIL indicator per line, not the numbers).
 
 Command sequence and tolerances are copied from SELFTEST_Program.TXT (user-supplied, the
-R&S factory self-test source, one directory up from this project) -- see CLAUDE.md for the
+R&S factory self-test source, in external/selftest-program/) -- see CLAUDE.md for the
 full cross-reference and the run recorded on 2026-09-22 (serial 100330/6, 121/121 pass).
 
 Sections covered (full resolution, matching the original):

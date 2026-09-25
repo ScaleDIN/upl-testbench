@@ -33,6 +33,12 @@ python -m pip install pyserial numpy scipy sounddevice soundfile matplotlib
 python -m pip install pyvisa          # only if you'll use GPIB (see below)
 ```
 
+**Files not in git.** R&S firmware, manuals, application notes, the UPA‑CD test disc and other
+third-party material aren't ours to redistribute. [`external/`](external/README.md) has a folder
+for each, with a README saying what goes there and where to find it; the firmware disks go in
+`DISK1/`/`DISK2/`. Only `upacd_test.py` needs one of them to run (the UPA‑CD zip, in
+`external/upa-cd/`).
+
 ### Connecting to the UPL: serial or GPIB
 
 Every script's UPL port option (`--port`, or `--upl-port` where a DUT port is also involved) takes
@@ -509,7 +515,7 @@ A step buried in noise therefore still gets a reading: it just reads high, which
 −91 dBFS reading, so `linearity` refuses to run without `--exclusive` unless you pass
 `--allow-shared`. Check the DUT reports 44.1 kHz, not 48.
 
-Tracks are read straight out of `UPA-CD-….zip` — no need to unpack 809 MB. `--dry-run` exercises
+Tracks are read straight out of the zip in `external/upa-cd/` — no need to unpack 809 MB. `--dry-run` exercises
 the whole pipeline, segmentation included, with no instrument and no audio device.
 
 **Level warning:** several disc tracks sit at 0 dBFS and the booklet warns they are "much higher
@@ -585,6 +591,7 @@ for when that isn't available or you want a single member on stdout.)
 | top level | UPL control (`upl_capture.py`, `ser_in.py`), `report.py` (results folders + reports), `upl_selftest.py`, `audio_tests.py`; DUT drivers and their tools (`dcx2496.py`, `dcx_sweep.py`, `nad_m51.py`, see the equipment guides) |
 | `measurements/` | characterization scripts: each drives the UPL (and usually a DUT) through one test and writes a results folder |
 | `tools/` | utilities: disk/file backup, SNDFILE batch transfer, LZH extraction, test-signal generator |
+| `external/`, `DISK1/`, `DISK2/` | third-party files (manuals, app notes, UPA‑CD, B23 data, firmware disks, DUT docs), **git-ignored** except a README in each saying what goes there |
 | `testsignals/` | generated test WAVs, **git-ignored** — rebuild with `tools/testsignals.py` |
 | `results/` | one folder per run (`results/<test>/<label>_<timestamp>/`, see [Where results go](#where-results-go)), `index.html`, and the instrument backups `CAL/`, `DISK/`, `REF/`. **git-ignored** (it holds the serial number, option key and calibration) |
 
@@ -597,6 +604,6 @@ for when that isn't available or you want a single member on stdout.)
 - **`SELFTEST_README.md`** — standalone guide for `upl_selftest.py`.
 - **`DCX2496_README.md`**, **`M51_README.md`** — per-device guides for units the PC also controls.
 - **`dcx2496_protocol.md`** — the DCX2496's full reverse-engineered serial protocol, verbatim.
-- **`Application Notes/`, the two operating manual PDFs, and the R&S brochure/spec sheet** (one
-  directory up) — original R&S documentation; `CLAUDE.md` has a topic-by-topic catalog of what's
-  in the Application Notes folder specifically.
+- **`external/`** — original R&S documentation (manuals, application notes, the factory selftest
+  program) and other third-party files, not in git; see [external/README.md](external/README.md).
+  `CLAUDE.md` has a topic-by-topic catalog of the application notes.

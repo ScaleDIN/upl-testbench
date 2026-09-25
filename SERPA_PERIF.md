@@ -2,9 +2,9 @@
 
 Black-box model of the two R&S custom chips on the **Digital Board 1078.2708**, from:
 
-- **[S]** the Service Manual Vol. 2 schematics (Drive: *Service Manual/UPL/Bart's Version/
-  R&S_UPL_Audio_Analyzer_Serv_Vol_2.pdf.pdf*, PDF pages 11–40 = Digital Unit sheets 1–18);
-- **[S2]** the separate schematic set *Schaltplan_ocr.pdf* (Drive folder `1EirqBKxammtfQwbRM_yZUtozm_zU9UU6`),
+- **[S]** the Service Manual Vol. 2 schematics (*R&S_UPL_Audio_Analyzer_Serv_Vol_2.pdf*, from the
+  diyAudio community archive (see `CLAUDE.md`), PDF pages 11–40 = Digital Unit sheets 1–18);
+- **[S2]** the separate schematic set *Schaltplan_ocr.pdf* (same archive),
   an earlier revision of the same board (plotted 27.10.95, 18 sheets). Its PDF page 17 is
   **"KEYBOARD DECODER", the PERIF2 sheet**, which is missing from the Vol. 2 scan. Its page 1
   has the front-panel connectors;

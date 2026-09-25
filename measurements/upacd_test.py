@@ -96,8 +96,21 @@ TRACK4_STEP_S = 10.0          # each level step lasts 10 s (booklet)
 # Track 32 multifrequency, -12 dB each, sum level RMS -4.2 dB.
 TRACK32_TONES_HZ = [52.5, 315.0, 3150.0, 6300.0, 10080.0, 12600.0]
 
-DEFAULT_ZIP = os.path.join("..", "UPA-CD-20260923T062823Z-1-001.zip")
 WAV_PREFIX = "UPA-CD/Wav Files/"
+
+
+def default_zip():
+    """The UPA-CD zip: the first *.zip in external/upa-cd/ (see its README), else the
+    original download's name one level above the project folder."""
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+    here = os.path.join(root, "external", "upa-cd")
+    zips = sorted(f for f in os.listdir(here) if f.lower().endswith(".zip")) if os.path.isdir(here) else []
+    if zips:
+        return os.path.normpath(os.path.join(here, zips[0]))
+    return os.path.normpath(os.path.join(root, "..", "UPA-CD-20260923T062823Z-1-001.zip"))
+
+
+DEFAULT_ZIP = default_zip()
 
 
 def find_track_wav(zip_path, track):
