@@ -2262,6 +2262,7 @@ def _main(u, a, rep):
                 log(f"# DUT volume set to {a.volume:g} dB for this run (restored at the end)")
         with preserve_state(u, a.state_file, enabled=a.preserve):
             if not a.no_reset:
+                rig.w("*CLS")      # stale errors (e.g. -420 from a VISA open) aren't *RST's
                 rig.setc("*RST", slow=True)
                 rig.w("*CLS")
             rig.level_setting = ""

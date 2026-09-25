@@ -154,6 +154,31 @@ reads ~1 dB/oct short; the 2026‑09‑23 live LR24 octave gave 24.6); limiter k
 exact −1 dB point. Differences from the old scripts: default `--vin` 0.5 V (use `--vin 1` to compare
 with 2026‑09‑23), sweeps on the UPL's native engine instead of host-stepped, B1 only if fitted.
 
+### First live `analog_test.py all` — DCX2496 stereo (2026‑09‑25, 21:29)
+
+UPL over GPIB, DCX on COM2. Gen CH1/CH2 → DCX in A/B; **out1 and out3** (the user's L/R low
+outputs) → analyzer CH1/CH2, `--vin 1 --dut-out out1,out3`. Crossover can't be disabled from the
+panel in that preset, but the script's serial `set_crossover(off)` did it: FR flat. Zero commands
+rejected. Report: `results/analog/dcx_stereo_20260925-212921/`.
+- Gain +0.44/+0.38 dB, L−R 0.06; FR −0.3 dB at 20 Hz, flat to 20 kHz; DC < 1 mV; polarity normal.
+- THD+N vs freq at 1 V: −90.5 best, **−83 dB worst at 5 kHz**. vs level: best −89.6 at +4…+6 dBu,
+  still −86.4 at +20.2 dBu, **no clipping by 8 V** (DCX rated +22 dBu). ~6 dB better at the top than
+  23 Sep's −80 — probably that run's THD+N latch (see M51 section), now reset by `Rig.unlatch()`.
+- FFT 1 kHz: H3 −90.5 dBc dominant, H2 −102; hum ≤ −109 dBc.
+- Noise 37/38 µV (22k), 26.4 µV A, **239 µV at 110k** (shaped ultrasonic noise); EIN −89.8 dBu A.
+- **SMPTE is the real weakness, and it's genuine:** best −79.3 dB at 0.32 V, −71.6 at 1 V, −65.2 at
+  3.16 V — worsens with level (not noise), while 1 kHz THD+N stays flat to +20 dBu. CCIF best −107
+  at 0.5 V → −96 at 3.16 V. Multitone worst product at 141 Hz. ⇒ an LF-dependent nonlinearity.
+  Next: THD at 50–100 Hz at high level, FFT of the SMPTE sidebands.
+- Crosstalk −80/−85 dB flat 100 Hz–1 kHz, −76/−78 at 20 kHz (frequency-flat, asymmetric →
+  shared ground/supply; undriven input on the switched-off gen channel, not a shorting plug).
+- Zout 101/100 Ω, Zin 35.0 kΩ flat to 20 kHz. Gain law tracking ≤ 0.014 dB over −15…+15.
+- Xover HP 500 Hz: but12/24/48 −3 dB at 511–516 Hz, slopes 12.0/23.9/47.7; LR24 −6 dB at 511 Hz;
+  bes24 −3 dB at 762 Hz (Behringer's Bessel fc isn't the −3 dB point). L/R identical.
+- Limiter (−10 dB): knee ~3.3 V in, output held at 3.08 V — same as 23 Sep (3.06 V).
+- Fix found on the way: `*RST` was blamed for a stale `-420` from the VISA open → `*CLS` before
+  `*RST` in `analog_test.py` and `dac_test.py`.
+
 ## Serial retry with a 3-wire null modem, XON/XOFF (2026‑09‑25)
 
 User swapped null modem to retry the old serial failures. Same Prolific adapter (COM2; the only
