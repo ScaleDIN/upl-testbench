@@ -23,7 +23,8 @@ python nad_m51.py --help                     # every subcommand
 
 - **USB input:** laptop → USB → M51 → balanced out → UPL analyzer, with `--source pc`.
 - **S/PDIF, optical and AES inputs:** fed from the UPL's digital output with `--source upl`
-  (the default). The UPL's B29 drives BAL, UNBAL and optical at once, so optical needs no setting.
+  (the default). The UPL's digital output drives BAL, UNBAL and optical at once, so optical needs
+  no setting.
 
 `--dut m51 [--dut-port COM2]` works with either source:
 

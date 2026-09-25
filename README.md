@@ -41,11 +41,12 @@ python -m pip install pyvisa          # only if you'll use GPIB (see below)
 - a UPL with option **UPL‑B4** (remote control), connected over RS‑232 or GPIB (below)
 - Python 3 and the packages above
 - for GPIB only: the Keysight IO Libraries Suite and `pyvisa`
-- for testing a DAC without UPL‑B29/B2: a Windows PC, since the PC plays the test signal
+- for testing a DAC without a digital audio option (UPL‑B2/B29): a Windows PC, which then plays
+  the test signal
 
 **UPL options:** nothing beyond B4 is needed to test a DAC. Without a digital audio option the
 PC plays the test signal (see [Choosing the signal source](#choosing-the-signal-source)).
-UPL‑B29 (or the older B2, 44.1/48 kHz only) lets the UPL feed the DAC's S/PDIF or AES input
+A digital audio option (UPL‑B2 or B29) lets the UPL feed the DAC's S/PDIF or AES input
 itself and adds the interface tests; UPL‑B22 adds the jitter test; UPL‑B1 is used by the
 selftest's low-distortion sections. `upl_selftest.py` skips the sections for options it doesn't
 find in `*OPT?`, and `dac_test.py --source upl` checks `*OPT?` before it starts.
@@ -338,7 +339,7 @@ python measurements/dac_test.py --port COM7 --source pc --device N --settle 0.6 
   runs every test. A DAC without a volume control: leave out `--set-level --target 2`.
 - It takes a while. The results are in `results/dac/mydac_<timestamp>/report.html`.
 
-With UPL‑B29 feeding the DAC's S/PDIF/AES input instead, leave out
+With a digital audio option (UPL‑B2/B29) feeding the DAC's S/PDIF/AES input instead, leave out
 `--source pc --device N --settle 0.6`. The rest of this section explains each step and option.
 
 #### Choosing the signal source
@@ -346,11 +347,10 @@ With UPL‑B29 feeding the DAC's S/PDIF/AES input instead, leave out
 | You have | Source | Reaches the DAC's… | Sample rates |
 |---|---|---|---|
 | **a UPL without a digital audio option** (most units), and a Windows PC | **`--source pc --device N`**: this PC plays each tone | **USB** input directly; **coax/optical** input through a USB→S/PDIF interface | whatever the PC output and the DAC both take, e.g. up to 192 kHz |
-| a UPL with **UPL‑B29** | `--source upl` (the default): the UPL's own digital generator | coax, optical, AES3 | 44.1, 48, 88.2, 96 kHz |
-| a UPL with **UPL‑B2** (the older option) | `--source upl` | coax, optical, AES3 | 44.1, 48 kHz only |
+| a UPL with a **digital audio option** (UPL‑B2 or B29) | `--source upl` (the default): the UPL's own digital generator | coax, optical, AES3 | 44.1, 48, 88.2, 96 kHz (B2: 44.1/48 only) |
 
 To see which options your UPL has: `python upl_capture.py --port COM7 raw "*OPT?"` and look for
-`B29` or `B2` (and `B22`, for the jitter test). You don't have to check first: with `--source upl`
+`B2` or `B29` (and `B22`, for the jitter test). You don't have to check first: with `--source upl`
 the script reads `*OPT?` itself and stops with a pointer here if neither is fitted, or if a B2 is
 asked for 88.2/96 kHz.
 
@@ -371,19 +371,19 @@ bandpass the script moves to each tone (same results, set differently). `jitter`
 interface's own clock jitter is part of every result, and nothing here can separate it from the
 DAC's. **`--source pc` is written and tested offline but not yet run live.**
 
-**The UPL source (`--source upl`, needs B29 or B2)** is bit-exact too, and the UPL sets the sample
+**The UPL source (`--source upl`, needs B2 or B29)** is bit-exact too, and the UPL sets the sample
 rate. It can also degrade the interface on purpose: jitter (with UPL‑B22), a 100 m cable
 simulator, low signal voltage, off-nominal sample rates, 16/20/24-bit words. Run live on two DACs
-with B29; the B2 case is inferred from the manuals and not yet tried.
+with a B29; B2's 48 kHz limit comes from the manuals, not tried yet.
 
-| Test | PC source | UPL‑B2 | UPL‑B29 |
-|---|---|---|---|
-| `setlevel`, `check`, `fr`, `thdn`, `fft`, `imd`, `xtalk`, `zout`, `stability`, `jtest`, `multitone`, `linearity`, `imdlevel`, `filter` | yes, any rate the PC output and the DAC both take | yes, 44.1/48 kHz | yes |
-| `fft --images`, `fr --wide` above 20 kHz | yes | ≤ 21.6 kHz (48 kHz is the top rate) | yes, to 43 kHz |
-| `jitter` | **no** (can't inject jitter) | with UPL‑B22 | with UPL‑B22 |
-| `interface` (input level, lock range, word length) | **no** | yes | yes |
-| `polarity` | **no** (use `testsignals` file 18, half-waves, and a scope) | yes | yes |
-| `jtest` as a jitter test | includes the PC/interface's jitter | clean UPL clock | clean UPL clock |
+| Test | PC source | UPL source (B2/B29) |
+|---|---|---|
+| `setlevel`, `check`, `fr`, `thdn`, `fft`, `imd`, `xtalk`, `zout`, `stability`, `jtest`, `multitone`, `linearity`, `imdlevel`, `filter` | yes, any rate the PC output and the DAC both take | yes |
+| `fft --images`, `fr --wide` above 20 kHz | yes | yes, to 43 kHz (B2: to 21.6 kHz, as it stops at 48 kHz) |
+| `jitter` | **no** (can't inject jitter) | with UPL‑B22 |
+| `interface` (input level, lock range, word length) | **no** | yes |
+| `polarity` | **no** (use `testsignals` file 18, half-waves, and a scope) | yes |
+| `jtest` as a jitter test | includes the PC/interface's jitter | clean UPL clock |
 
 A player that can only play files itself (a DAP's own playback) can't be driven this way;
 use `tools/testsignals.py` + `upacd_test.py --external` for that.
@@ -396,7 +396,7 @@ another DUT means one small class in `dac_test.py`'s `DUTS`.
 
 #### Step by step
 
-The commands are for the PC source. **With UPL‑B29 or B2, leave out
+The commands are for the PC source. **With a digital audio option (UPL‑B2/B29), leave out
 `--source pc --device N --settle 0.6`.** Replace `N` with the device number (see above) and
 `COM7` with the UPL's port.
 
