@@ -41,10 +41,12 @@ python -m pip install pyvisa          # only if you'll use GPIB (see below)
 - Python 3 and the packages above
 - for GPIB only: the Keysight IO Libraries Suite and `pyvisa`
 
-**UPL options some tests use:** UPL‑B29 digital audio for `dac_test.py --source upl` (the older B2
-works at 44.1/48 kHz only);
-UPL‑B22 for its `jitter` test; UPL‑B1 for the low-distortion generator sections of the selftest.
-Analog tests with the UPL's own generator and analyzer need only the base unit and B4.
+**UPL options some tests use:** UPL‑B29 digital audio for `dac_test.py --source upl` (the older
+B2 works at 44.1/48 kHz only; with neither, a USB→S/PDIF interface can feed the DAC instead, see
+[Without UPL‑B29](#without-uplb29-uplb2-or-a-usbspdif-interface)); UPL‑B22 for the `jitter` test;
+UPL‑B1 for the low-distortion generator sections of the selftest (`upl_selftest.py` skips the
+sections for options it doesn't find in `*OPT?`). Analog tests with the UPL's own generator and
+analyzer need only the base unit and B4.
 
 **Files not in git.** R&S firmware, manuals, application notes, the UPA‑CD test disc and other
 third-party material aren't ours to redistribute. [`external/`](external/README.md) has a folder
@@ -335,6 +337,37 @@ DAC with a remote-control driver, **`--dut NAME --dut-port COMn`** logs its sour
 the report, sets `--volume` for the run and restores it, and enables **`volsweep`** (THD+N/THD/
 level vs the DUT's volume). Supported so far: `m51` ([M51_README.md](M51_README.md)). Adding
 another DUT means one small class in `dac_test.py`'s `DUTS`.
+
+#### Without UPL‑B29: UPL‑B2, or a USB→S/PDIF interface
+
+`--source upl` needs a digital audio option on the UPL. The analyzer side of every test is the
+UPL's analog analyzer, which every UPL has, so without B29 there are two ways to feed a DAC's
+S/PDIF, optical or AES input:
+
+- **UPL‑B2** (the older digital audio option, 55 kHz clock): `--source upl` works as with B29
+  but only at **44.1 and 48 kHz** (`--fs 44100,48000`). B2 has no high-rate mode, so 88.2/96 kHz
+  aren't available. All tests run, but `jitter` also needs UPL‑B22.
+- **No digital option at all: a USB→S/PDIF interface** (USB audio device with a coax or optical
+  output) driven with `--source pc --device N`. The PC plays each tone bit-exact through it, and
+  the DAC is measured as usual. For this to be valid:
+  - the interface must pass audio **bit-exact**: WASAPI exclusive mode (the default; don't use
+    `--shared`), no resampling, no volume or DSP in its driver or control panel;
+  - its output rate must follow the file (check what the DAC reports it's locked to);
+  - the interface's own clock jitter becomes part of the measurement, and nothing here can
+    separate it from the DAC's.
+
+| Test | UPL‑B29 | UPL‑B2 | USB→S/PDIF interface (`--source pc`) |
+|---|---|---|---|
+| `check`, `fr`, `thdn`, `fft`, `imd`, `xtalk`, `zout`, `stability`, `jtest`, `multitone`, `linearity`, `imdlevel`, `filter` | yes | yes, 44.1/48 kHz | yes, any rate the interface and DAC both take |
+| `fft --images`, `fr --wide` above 20 kHz | yes | 44.1/48 kHz only, so ≤ 21.6 kHz | yes |
+| `jitter` (needs **UPL‑B22** for the jitter injection) | yes | yes, if B22 fitted | **no**: can't inject jitter |
+| `interface` (input level sweep, sample-rate lock range, word length) | yes | yes | **no**: needs the UPL's digital generator |
+| `polarity` | yes | yes | **no** (`testsignals` file 18, half-waves, with a scope instead) |
+| `jtest` as a jitter test | clean UPL clock | clean UPL clock | includes the interface's jitter |
+
+`--source pc` is written and tested offline but **not yet run live** (see below). The B2 case is
+inferred from the manuals (B2's rate range; B29 is the high-rate version) and hasn't been tried:
+if the UPL rejects `CONF:DAI BRM` on a B2, the run lists it among the rejected commands at the end.
 
 Physical setup: UPL digital out → DAC input. For a coax (S/PDIF) input use the UPL's **UNBAL BNC
 output directly** — it is already a transformer-coupled 75 Ω source (Service Manual Vol.2 p.247:
