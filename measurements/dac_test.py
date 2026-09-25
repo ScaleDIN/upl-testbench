@@ -792,9 +792,20 @@ class PCSource:
             raise SystemExit(f"--device {self.a.device} is a {api} device; exclusive mode needs a "
                              f"'Windows WASAPI' one (python measurements/upacd_test.py devices)")
         extra = None if self.a.shared else sd.WasapiSettings(exclusive=True)
-        self.stream = sd.OutputStream(samplerate=fs, device=self.a.device, channels=2,
-                                      dtype="int32", callback=self._cb, dither_off=True,
-                                      extra_settings=extra)
+        # Some drivers (the laptop's Realtek, 2026-09-25) refuse a callback stream in
+        # exclusive mode at 44.1/88.2k unless the buffer size suits them, and PortAudio
+        # reports that as "Invalid device". 50 ms opened at all four rates; latency is
+        # irrelevant for steady tones, so fall back to it.
+        for lat in (None, 0.05):
+            try:
+                self.stream = sd.OutputStream(samplerate=fs, device=self.a.device, channels=2,
+                                              dtype="int32", callback=self._cb, dither_off=True,
+                                              extra_settings=extra,
+                                              **({} if lat is None else {"latency": lat}))
+                break
+            except sd.PortAudioError:
+                if lat is not None:
+                    raise
         self.stream.start()
         r.log(f"   PC output: device {self.a.device}, {fs} Hz, {self.a.bits}-bit words, "
               f"{'shared (resampled!)' if self.a.shared else 'WASAPI exclusive'}, "
