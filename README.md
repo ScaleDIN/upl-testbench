@@ -21,9 +21,10 @@ Separate guides:
   (dry run, native sweep, FFT paging, `--preserve`, backups)
 - [Data-egress tools](#data-egress-tools-getting-files-off-the-upl): getting files off the UPL
 - [UPL self-test](#upl-self-test)
-- **[Tests for any device](#tests-for-any-device)**: the DAC suite, test-signal files, file and
-  test-disc playback, analyzer filter checks, the soundcard suite
+- **[Tests for any device](#tests-for-any-device)**: the DAC suite, the analog (preamp) suite,
+  test-signal files, file and test-disc playback, analyzer filter checks, the soundcard suite
   - **DAC quick start: [I just want measurements](#i-just-want-measurements-tldr)**
+  - **Preamp/analog quick start: [Analog quick start](#analog-quick-start)**
 - [Equipment-specific control](#equipment-specific-control): pointers to the per-device guides
 - Reference: [firmware archive extraction](#firmware-archive-extraction-toolslzh_extractpy),
   [folder layout](#folder-layout), [where things are documented](#where-things-are-documented)
@@ -48,7 +49,8 @@ python -m pip install pyvisa          # only if you'll use GPIB (see below)
 PC plays the test signal (see [Choosing the signal source](#choosing-the-signal-source)).
 A digital audio option (UPL‑B2 or B29) lets the UPL feed the DAC's S/PDIF or AES input
 itself and adds the interface tests; UPL‑B22 adds the jitter test; UPL‑B1 is used by the
-selftest's low-distortion sections. `upl_selftest.py` skips the sections for options it doesn't
+selftest's low-distortion sections, and by `analog_test.py` when fitted (without it, the standard
+generator; only `fr --wide` above 21.75 kHz needs B1). `upl_selftest.py` skips the sections for options it doesn't
 find in `*OPT?`, and `dac_test.py --source upl` checks `*OPT?` before it starts.
 
 **Files not in git.** R&S firmware, manuals, application notes, the UPA‑CD test disc and other
@@ -594,6 +596,73 @@ leaves the analyzer's THD+N floor ~6 dB worse until a native RMS sweep or a powe
 `thdn` clears it itself; if THD+N readings elsewhere look ~6 dB high, that's the cause.
 **Not yet run live:** `--source pc` (USB DACs), `--dut` / `--volume`, and `volsweep`.
 
+### Analog DUT characterization: preamps and friends (`measurements/analog_test.py`)
+
+The DAC suite's analog sibling, for anything analog in and analog out: a line preamp, a phono
+stage, a mic pre, a buffer. The UPL's analog generator drives the DUT's inputs, and its analog analyzer
+measures the outputs. Same results folder layout, same report, and the same UPL workarounds (it
+reuses `dac_test.py`'s rig). All levels are **volts rms at the DUT's input** (`--vin`), not dBFS.
+
+**Needs only a base UPL with UPL‑B4 (remote).** Sines come from the standard generator
+(2 Hz–21.75 kHz). Its residual THD+N (about −103 dB, 22 kHz bandwidth) sits well below almost
+any preamp. If `*OPT?` lists **UPL‑B1** (low-distortion generator), the script uses it for sines
+automatically: a floor a few dB lower, THD around −122 dB, and frequency response to 100 kHz
+(`fr --wide`). Without B1, `--wide` stops at 21.75 kHz and says so. `--no-lowd` forces the
+standard generator even when B1 is fitted.
+
+#### Analog quick start
+
+UPL generator outputs → DUT inputs (XLR, or `--unbal` for the BNC output into RCA inputs); DUT
+outputs → UPL analyzer inputs 1 and 2. **Nothing else on the DUT's outputs: no power amp, no
+headphones.** `thdn` deliberately drives the DUT into clipping.
+```bash
+python measurements/analog_test.py --port COM7 --vin 0.5 check
+python measurements/analog_test.py --port COM7 --vin 0.5 --set-level --target 2 --label mypre all
+```
+- `check` must say `signal: OK`. It also prints the gain, L−R, **DC offset at the output** (check
+  this before a power amp ever sees the DUT), and absolute polarity.
+- `--set-level --target 2` (or `--gain 12`) walks you through turning the volume until 0.5 V in
+  gives 2 V out, then runs everything. A fixed-gain DUT: leave it out.
+- Phono stage: `--vin 0.005 --vmax 0.2` for MM (0.0005 for MC), and `fr --riaa` (or `--riaa-iec`)
+  prints and plots the deviation from the RIAA playback curve.
+
+#### Tests
+
+| Test | What it measures |
+|---|---|
+| `setlevel` | guided: live output V, gain and THD while you turn the knob toward `--target`/`--gain` |
+| `check` | gain and L/R balance at 1 kHz, DC offset at the output (input idle), polarity |
+| `fr` | frequency response, broadband and selective (a difference = hum/noise/oscillation), −3 dB points, L−R; `--wide`, `--riaa` |
+| `thdn` | THD+N and THD vs frequency at `--vin`; then vs input level, in 2 dB steps up to clipping: input and output at **0.1 % and 1 % THD+N** (maximum output, input overload) |
+| `noise` | input terminated by the muted generator (`--zgen`, 10 Ω by default): output noise at 22 kHz, A-weighted, CCIR‑2k (ARM) and 110 kHz; S/N re `--ref-out` (default: the output at `--vin`); **EIN** in dBu and nV/√Hz; hum lines of the idle output |
+| `fft` | spectrum of 1 kHz at `--vin`: harmonic signature, hum |
+| `imd`, `imdlevel` | SMPTE 60 Hz + 7 kHz 4:1 and CCIF 19 + 20 kHz; at `--vin`, and vs input level |
+| `xtalk` | crosstalk both ways, selective, 100 Hz–20 kHz |
+| `zout` | output impedance (analyzer 200 kΩ vs 600 Ω load) |
+| `zin` | input impedance at 1 and 20 kHz (generator source 10 vs 600 Ω; XLR output only) |
+| `multitone` | 17-tone multisine, products between the tones |
+| `all` | all of the above except `setlevel` |
+| `tracking` | guided, not in `all`: volume-control L/R tracking, one reading per knob position |
+| `cmrr` | guided, not in `all`: balanced-input common-mode rejection (asks you to feed the BNC output into XLR pins 2+3 joined) |
+| `gainlaw` | needs `--dut`: the DUT's own gain setting stepped (default −15…+15 dB), measured vs set |
+| `xover` | needs `--dut`: crossover filter types (`--types`) at each cutoff (`--freqs`), high- or low-pass (`--side`); −3/−6 dB points and stopband slope per curve |
+| `limiter` | needs `--dut`: output vs input with the DUT's limiter on (`--thresh`), where limiting starts |
+
+**One-channel DUTs** (a mic pre, or one output patched): `--mono` reports analyzer CH1 only.
+**A DUT the PC controls:** `--dut dcx` (Behringer DCX2496) sets its output flat first and adds
+`gainlaw`, `xover` (filter types and cutoffs: −3/−6 dB points, slope) and `limiter` to `all`;
+`--dut-asis` measures it as it is set up. See [DCX2496_README.md](DCX2496_README.md).
+
+`--dut-spec NAME|FILE` prints published figures next to results, as for DACs (keys: `gain dc fr
+thdn maxout snr ein imd xtalk zout zin cmrr`). A preamp with a volume control ahead of its active
+stage has an input overload that depends on the knob, so `thdn` reports it *at the current
+setting*. Turn it down and rerun to find the input stage's own limit.
+
+**Not yet run live (written 2026‑09‑25).** Verified offline against `--dry-run`, a simulated
+preamp (gain, noise, soft clipping, Zin/Zout; with and without B1 in `*OPT?`) and a simulated DCX
+(gain offset, Butterworth/Linkwitz-Riley filters, limiter). The DAC suite never
+used the UPL's analog generator, so `check` is the first thing to run.
+
 ### Test-signal files for any DAC or player (`tools/testsignals.py`)
 
 Generates a device-agnostic WAV test set, one folder per format (default **44.1/16, 48/24, 96/24,
@@ -727,7 +796,7 @@ remote control adds.
 
 | Guide | Unit | Adds |
 |---|---|---|
-| [DCX2496_README.md](DCX2496_README.md) | Behringer DCX2496 crossover | `dcx2496.py` driver; crossover/EQ/gain set by the PC and measured by the UPL (`dcx_sweep.py`, `measurements/dcx_*.py`) |
+| [DCX2496_README.md](DCX2496_README.md) | Behringer DCX2496 crossover | `dcx2496.py` driver; crossover/EQ/gain set by the PC and measured by the UPL (`measurements/analog_test.py --dut dcx`, `measurements/dcx_balanced_test.py`) |
 | [M51_README.md](M51_README.md) | NAD M51 DAC | `nad_m51.py` driver; `dac_test.py --dut m51` (volume set/restore, `volsweep`) |
 
 To add a unit: a driver module at the top level, a class in `dac_test.py`'s `DUTS` if it's a DAC
@@ -751,7 +820,7 @@ for when that isn't available or you want a single member on stdout.)
 
 | Folder | Contents |
 |---|---|
-| top level | UPL control (`upl_capture.py`, `ser_in.py`), `report.py` (results folders + reports), `upl_selftest.py`, `audio_tests.py`; DUT drivers and their tools (`dcx2496.py`, `dcx_sweep.py`, `nad_m51.py`, see the equipment guides) |
+| top level | UPL control (`upl_capture.py`, `ser_in.py`), `report.py` (results folders + reports), `upl_selftest.py`, `audio_tests.py`; DUT drivers and their tools (`dcx2496.py`, `nad_m51.py`, see the equipment guides) |
 | `measurements/` | characterization scripts: each drives the UPL (and usually a DUT) through one test and writes a results folder |
 | `tools/` | utilities: disk/file backup, SNDFILE batch transfer, LZH extraction, test-signal generator |
 | `external/`, `DISK1/`, `DISK2/` | third-party files (manuals, app notes, UPA‑CD, B23 data, firmware disks, DUT docs), **git-ignored** except a README in each saying what goes there |

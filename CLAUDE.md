@@ -67,6 +67,63 @@ reading made `rec()` return no deviation and the `%+.2f` log line raised a TypeE
 command. It used to send `MMEM:DEL` straight after the slow `MMEM:LOAD:STAT`, the pattern that
 makes the PL2303 double a byte. None of this has been run on the instrument yet.
 
+## Analog DUT suite, `measurements/analog_test.py` (2026‑09‑25) — not yet run live
+
+User asked for "something like the DAC suite, for analog — say, a preamp", and stressed that
+**most UPL owners have no UPL‑B1**. Built on `dac_test.py`'s `Rig` (subclass `AnalogRig`,
+`AnalogSource` = the analog generator); levels are **V rms EMF at the DUT input** (`--vin`, default
+0.5 V), capped by `--vmax` (default 8 V, generator max 20 V). Tests: setlevel, check (gain, L−R,
+output DC with input idle, POL polarity), fr (broadband + selective, −3 dB points, `--wide`,
+`--riaa`/`--riaa-iec`), thdn (vs freq; vs level up to clipping → input/output at 0.1 %/1 %), noise
+(generator muted at 1e‑20 V terminates the input; 22k / A / CCIR‑2k ARM / 110k; S/N; EIN dBu and
+nV/√Hz; idle hum FFT), fft, imd, imdlevel, xtalk, zout, zin, multitone; guided `tracking` and
+`cmrr` outside `all`. Results in `results/analog/`.
+
+Design points:
+- **B1 is optional, detected from `*OPT?`.** Without it no `SOUR:LOWD` command is ever sent;
+  sines come from the universal generator (2 Hz–21.75 kHz, loopback THD+N −103.1 dB vs −106.7 with
+  B1, 2026‑09‑22), and `fr --wide` stops at 21.75 kHz with a message. With B1: 10 Hz–110 kHz.
+  MDIS/DFD/MULT/POL always use the universal generator (B1 is sine-only).
+- **Clipping detection ignores the noise-limited bottom of the level sweep.** The sweep starts
+  60 dB below `--vin`, where THD+N is pure noise and can exceed 1 % on a phono stage. A step
+  counts as clipping only if it is > 1 % *and* > 10 dB above the best seen; the 0.1 %/1 %
+  crossings are interpolated from the THD+N minimum upward. (The first draft stopped at 1 %
+  anywhere; the fake-preamp run showed it would stop at the first point.)
+- `Rig.unlatch()` is run after the clipping sweep (native RMS sweep; see the THD+N latch above).
+- `zin`: k = V(10 Ω source)/V(600 Ω) = (Zin+600)/(Zin+10). Only on BAL (`OUTP:IMP` is XLR-only).
+  At 47 kΩ the two readings differ by 0.11 dB, so resolution fades above ~100 kΩ.
+- Crosstalk drives one generator channel with `OUTP:SEL CH1|CH2`; whether the switched-off channel
+  leaves the other DUT input open or terminated is unknown (Vol.2 says only "switched off").
+- `cmrr` needs the BNC UNBAL output into an XLR with pins 2+3 joined. Driving joined pins from the
+  BAL output would short the generator's two legs, so the script switches to `OUTP:TYPE UNB` first.
+
+Verified offline only: `--dry-run all`, and every test against a simulated preamp (subclassed
+`DryRunUPL`: 10 dB gain, 20 µV noise, tanh clip at 5 V, 47 kΩ in, 100 Ω out, `*OPT?` without B1)
+→ Zout 100 Ω, EIN −101.5 dBu, 1 % at 1.14 V in, no LOWD sent. RIAA table checked: +19.27 dB @ 20 Hz,
+−19.62 @ 20 kHz, IEC −3.0 dB extra at 20 Hz. From Vol.2 only, first live run will tell: OUTP:IMP,
+OUTP:TYPE UNB, OUTP:SEL CH1/CH2, MDIS/DFD/MULT/POL on the analog generator, `SENS:FILT1:CARM`, and
+the native sweep with LOWD ON.
+
+### DCX scripts folded into `analog_test.py` (2026‑09‑25, same day) — not yet run live
+
+`--dut dcx [--dut-port COM2] [--dut-out out1|out1,out2] [--dut-asis]` + `--mono`. `DcxDut` sets the
+output(s) flat (**now also unmutes** — the 2026‑09‑23 all-noise trap) and leaves them flat; the
+DCX can't be read back, so its settings are not restored. One output ⇒ `--mono` (CH1 only, CH2
+still measured so the UPL setup is identical, shown n/a; xtalk skipped). New DUT tests, in `all`
+when `--dut` is given (not with `--dut-asis`): `gainlaw` (= gauntlet A), `xover` (= gauntlet B and
+`dcx_sweep.py`, on the native sweep; per curve −3/−6 dB points and stopband slope by least squares
+over −15…−50 dB), `limiter` (= gauntlet C, knee = input where the gain is 1 dB down,
+log-interpolated). `thdn` covers `dcx_thdn.py` and `dcx_thd_vs_thdn.py`; `--dut-asis fr` covers
+`dcx_sweep.py --no-configure`. **Removed:** `dcx_sweep.py`, `measurements/dcx_thdn.py`,
+`dcx_thd_vs_thdn.py`, `dcx_gauntlet.py` (live-run 2026‑09‑23; in git before this change).
+`dcx_balanced_test.py` stays (its `--compare` report has no equivalent).
+Offline check against a modelled DCX (exact Butterworth/LR magnitudes, +0.42 dB offset, 3.06 V
+limiter): gain offset +0.42 dB, tracking 0.000; but12/24/48 −3.0 dB at fc, slope 12.0/24.0/48.1;
+LR24/48 −6 dB at fc, slope 23.1/46.8 (the −15…−50 dB window is still in LR's soft knee, so LR
+reads ~1 dB/oct short; the 2026‑09‑23 live LR24 octave gave 24.6); limiter knee 3.27 V in = the
+exact −1 dB point. Differences from the old scripts: default `--vin` 0.5 V (use `--vin 1` to compare
+with 2026‑09‑23), sweeps on the UPL's native engine instead of host-stepped, B1 only if fitted.
+
 ## Digital-audio loop failure, 2026‑09‑24 (evening) — cleared by a power cycle, not a setting
 
 **First live run of the updated selftest** (`upl_selftest.py --port COM2 --preserve`, report in
