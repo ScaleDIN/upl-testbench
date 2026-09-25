@@ -14,7 +14,8 @@ Separate guides:
 
 **Contents**
 
-- [Setup](#setup): install, and connecting to the UPL over **serial or GPIB**
+- [Setup](#setup): install, what's required vs optional, and connecting to the UPL over
+  **serial or GPIB**
 - [Where results go](#where-results-go): one folder per run, with a readable `report.html`
 - [Core control libraries](#core-control-libraries): `upl_capture.py` and the UPL basics
   (dry run, native sweep, FFT paging, `--preserve`, backups)
@@ -33,11 +34,30 @@ python -m pip install pyserial numpy scipy sounddevice soundfile matplotlib
 python -m pip install pyvisa          # only if you'll use GPIB (see below)
 ```
 
+### What you need
+
+**Required:**
+- a UPL with option **UPL‑B4** (remote control), connected over RS‑232 or GPIB (below)
+- Python 3 and the packages above
+- for GPIB only: the Keysight IO Libraries Suite and `pyvisa`
+
+**UPL options some tests use:** UPL‑B29 digital audio for `dac_test.py --source upl` (the older B2
+works at 44.1/48 kHz only);
+UPL‑B22 for its `jitter` test; UPL‑B1 for the low-distortion generator sections of the selftest.
+Analog tests with the UPL's own generator and analyzer need only the base unit and B4.
+
 **Files not in git.** R&S firmware, manuals, application notes, the UPA‑CD test disc and other
 third-party material aren't ours to redistribute. [`external/`](external/README.md) has a folder
-for each, with a README saying what goes there and where to find it; the firmware disks go in
-`DISK1/`/`DISK2/`. Only `upacd_test.py` needs one of them to run (the UPA‑CD zip, in
-`external/upa-cd/`).
+for each, with a README saying what goes there and where to find it. **None of them is needed to
+run the tools, with one exception:**
+
+| File | Status | Without it |
+|---|---|---|
+| UPA‑CD zip, in `external/upa-cd/` | **required** for `upacd_test.py` playing disc tracks | disc-track tests don't run; `upacd_test.py --wav` with `tools/testsignals.py` files still works |
+| Operating manuals, in `external/manuals/` | optional, strongly recommended | everything runs; Vol.2 is the SCPI reference if you change or extend a script |
+| Application notes, factory selftest program, service manuals | optional | everything runs; they're the sources behind the SCPI and hardware notes in `CLAUDE.md` |
+| Firmware disks, in `DISK1/`, `DISK2/` | optional | everything runs; only needed to look inside the firmware or reinstall it on a UPL |
+| B23 coded-audio library, DUT docs | optional | everything runs |
 
 ### Connecting to the UPL: serial or GPIB
 
