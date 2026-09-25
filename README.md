@@ -338,38 +338,39 @@ the report, sets `--volume` for the run and restores it, and enables **`volsweep
 level vs the DUT's volume). Supported so far: `m51` ([M51_README.md](M51_README.md)). Adding
 another DUT means one small class in `dac_test.py`'s `DUTS`.
 
-#### Without UPL‑B29: UPL‑B2, or a USB→S/PDIF interface
+#### Step by step
 
-`--source upl` needs a digital audio option on the UPL. The analyzer side of every test is the
-UPL's analog analyzer, which every UPL has, so without B29 there are two ways to feed a DAC's
-S/PDIF, optical or AES input:
+1. **Connect it** ([Connecting the DAC](#connecting-the-dac)): the UPL's digital output (or,
+   for a USB DAC, this PC) into the DAC, and the DAC's L/R outputs into the UPL's analyzer inputs
+   1 and 2. **Nothing else on the DAC's outputs**: several tests play full-scale tones.
+2. **Set the DAC up by hand:** the right input, any filter or mode settings you want tested,
+   EQ/DSP/"enhancers" off, and fixed-output mode if it has one.
+3. **Optional, offline:** `python measurements/dac_test.py --dry-run all` runs everything
+   against a stub and prints the SCPI, without touching the instrument.
+4. **Check lock and level:**
+   ```bash
+   python measurements/dac_test.py --port COM7 check
+   ```
+   Every rate should say `lock: YES`. If not: the cable, the DAC's input selection, or a rate
+   the DAC doesn't support (drop it from `--fs`).
+5. **Set the volume**, if the DAC has one ([Setting the volume](#setting-the-volume)):
+   ```bash
+   python measurements/dac_test.py --port COM7 --target 2 setlevel    # 2 V at 0 dBFS
+   python measurements/dac_test.py --port COM7 setlevel               # or: loudest clean setting
+   ```
+   Then leave it alone for the rest of the tests. Skip this step for a fixed-output DAC.
+6. **Run the tests**, all of them or the ones you want ([Running the tests](#running-the-tests)):
+   ```bash
+   python measurements/dac_test.py --port COM7 --label mydac all
+   ```
+   Pick the sample rates with `--fs`. For a USB DAC add `--source pc --device N --settle 0.6`.
+   Steps 5 and 6 can be one command: `--set-level --target 2 all`.
+7. **Read the results:** `results/dac/mydac_<timestamp>/report.html`. `results/index.html`
+   lists every run.
 
-- **UPL‑B2** (the older digital audio option, 55 kHz clock): `--source upl` works as with B29
-  but only at **44.1 and 48 kHz** (`--fs 44100,48000`). B2 has no high-rate mode, so 88.2/96 kHz
-  aren't available. All tests run, but `jitter` also needs UPL‑B22.
-- **No digital option at all: a USB→S/PDIF interface** (USB audio device with a coax or optical
-  output) driven with `--source pc --device N`. The PC plays each tone bit-exact through it, and
-  the DAC is measured as usual. For this to be valid:
-  - the interface must pass audio **bit-exact**: WASAPI exclusive mode (the default; don't use
-    `--shared`), no resampling, no volume or DSP in its driver or control panel;
-  - its output rate must follow the file (check what the DAC reports it's locked to);
-  - the interface's own clock jitter becomes part of the measurement, and nothing here can
-    separate it from the DAC's.
+#### Connecting the DAC
 
-| Test | UPL‑B29 | UPL‑B2 | USB→S/PDIF interface (`--source pc`) |
-|---|---|---|---|
-| `check`, `fr`, `thdn`, `fft`, `imd`, `xtalk`, `zout`, `stability`, `jtest`, `multitone`, `linearity`, `imdlevel`, `filter` | yes | yes, 44.1/48 kHz | yes, any rate the interface and DAC both take |
-| `fft --images`, `fr --wide` above 20 kHz | yes | 44.1/48 kHz only, so ≤ 21.6 kHz | yes |
-| `jitter` (needs **UPL‑B22** for the jitter injection) | yes | yes, if B22 fitted | **no**: can't inject jitter |
-| `interface` (input level sweep, sample-rate lock range, word length) | yes | yes | **no**: needs the UPL's digital generator |
-| `polarity` | yes | yes | **no** (`testsignals` file 18, half-waves, with a scope instead) |
-| `jtest` as a jitter test | clean UPL clock | clean UPL clock | includes the interface's jitter |
-
-`--source pc` is written and tested offline but **not yet run live** (see below). The B2 case is
-inferred from the manuals (B2's rate range; B29 is the high-rate version) and hasn't been tried:
-if the UPL rejects `CONF:DAI BRM` on a B2, the run lists it among the rejected commands at the end.
-
-Physical setup: UPL digital out → DAC input. For a coax (S/PDIF) input use the UPL's **UNBAL BNC
+UPL digital out → DAC input. For a coax (S/PDIF) input use the UPL's **UNBAL BNC
 output directly** — it is already a transformer-coupled 75 Ω source (Service Manual Vol.2 p.247:
 CLC430 driver → 1:1 transformer T2 → 150‖150 Ω = 75 Ω → BNC; Vol.1 p.2.74: level set as Vpp
 into 75 Ω, 0–2.125 V), so no 110→75 Ω transformer is needed. BNC→RCA adapter +
@@ -377,6 +378,44 @@ into 75 Ω, 0–2.125 V), so no 110→75 Ω transformer is needed. BNC→RCA ada
 via adapters; the script uses `INP:LOW FLOat` (grounding the input's low side added measurable
 noise with single-ended sources, see `CLAUDE.md` "Balanced vs single-ended comparison"),
 `--ground` to change it.
+
+#### Setting the volume
+
+Most results depend on where the DUT's volume is set, so set it deliberately and record it. What
+to aim for:
+
+- **A DAC with a fixed-output or bypass mode:** use it. That's the DAC without its volume
+  control, and the setting to compare.
+- **A DAC whose volume can reach unity** (0 dB, max): usually set it there. A digital volume
+  control costs a dB of dynamic range for every dB it attenuates (the M51 showed exactly this).
+  **But check that 0 dBFS doesn't clip** at that setting; if it does, back off until it's clean
+  (the M51 needed −1 dB).
+- **To compare with Audio Science Review:** set it so 0 dBFS gives **2 V** unbalanced (RCA) or
+  **4 V** balanced (XLR), if the volume allows.
+- **A headphone amp or player whose volume is just step numbers** (0–120, 1–60…): the numbers
+  mean nothing in dB, so pick by output. Either the **loudest clean setting** (the highest step
+  where a 0 dBFS tone doesn't clip) or a **fixed output** you use for every device you compare.
+  Note the step number. Turn off EQ, DSP, "enhancers" and volume limiters first.
+
+`setlevel` guides you through it. It plays 997 Hz at 0 dBFS and shows both channels' output and
+THD about once a second while you turn the knob:
+
+```bash
+python measurements/dac_test.py --port COM7 --target 2 setlevel             # aim for 2 V
+python measurements/dac_test.py --port COM7 setlevel                        # loudest clean setting
+python measurements/dac_test.py --port COM7 --set-level --target 2 all      # set it, then test
+```
+
+With `--target` each line says `turn UP` / `turn DOWN` / `OK` (within 0.1 dB, on the average of
+L and R). Without it, a line is flagged `CLIPPING?` once THD is 10 dB worse than the best seen so
+far: turn up until that appears, then back down until it's gone. Press Enter when done; it then
+asks what the device's volume reads and puts that in the report. It measures THD, not THD+N, on
+purpose: THD+N of a clipping 0 dBFS tone latches the UPL's THD+N floor about 6 dB high.
+
+**The tone is a full-scale 0 dBFS sine**, played until you press Enter (or `--max-time`): only the
+UPL may be connected to the outputs. No headphones, no amplifier.
+
+#### Running the tests
 
 ```bash
 python measurements/dac_test.py --dry-run all                  # offline: runs everything
@@ -454,42 +493,6 @@ python measurements/dac_test.py --port COM7 --source pc --device 16 --fs 44100,9
 `setlevel`, `check`, `xtalk`, `zout`, `polarity`, `interface`, `linearity`, `imdlevel` and `all` take no
 options of their own; `all` uses the defaults above for every test.
 
-#### Setting the volume
-
-Most results depend on where the DUT's volume is set, so set it deliberately and record it. What
-to aim for:
-
-- **A DAC with a fixed-output or bypass mode:** use it. That's the DAC without its volume
-  control, and the setting to compare.
-- **A DAC whose volume can reach unity** (0 dB, max): usually set it there. A digital volume
-  control costs a dB of dynamic range for every dB it attenuates (the M51 showed exactly this).
-  **But check that 0 dBFS doesn't clip** at that setting; if it does, back off until it's clean
-  (the M51 needed −1 dB).
-- **To compare with Audio Science Review:** set it so 0 dBFS gives **2 V** unbalanced (RCA) or
-  **4 V** balanced (XLR), if the volume allows.
-- **A headphone amp or player whose volume is just step numbers** (0–120, 1–60…): the numbers
-  mean nothing in dB, so pick by output. Either the **loudest clean setting** (the highest step
-  where a 0 dBFS tone doesn't clip) or a **fixed output** you use for every device you compare.
-  Note the step number. Turn off EQ, DSP, "enhancers" and volume limiters first.
-
-`setlevel` guides you through it. It plays 997 Hz at 0 dBFS and shows both channels' output and
-THD about once a second while you turn the knob:
-
-```bash
-python measurements/dac_test.py --port COM7 --target 2 setlevel             # aim for 2 V
-python measurements/dac_test.py --port COM7 setlevel                        # loudest clean setting
-python measurements/dac_test.py --port COM7 --set-level --target 2 all      # set it, then test
-```
-
-With `--target` each line says `turn UP` / `turn DOWN` / `OK` (within 0.1 dB, on the average of
-L and R). Without it, a line is flagged `CLIPPING?` once THD is 10 dB worse than the best seen so
-far: turn up until that appears, then back down until it's gone. Press Enter when done; it then
-asks what the device's volume reads and puts that in the report. It measures THD, not THD+N, on
-purpose: THD+N of a clipping 0 dBFS tone latches the UPL's THD+N floor about 6 dB high.
-
-**The tone is a full-scale 0 dBFS sine**, played until you press Enter (or `--max-time`): only the
-UPL may be connected to the outputs. No headphones, no amplifier.
-
 **Response above 20 kHz:** `fr --wide`, or `fr --stop <Hz>`. A stop above 21 kHz switches to the
 100 kHz analyzer (A100) by itself. The sample rate sets the ceiling: a DAC can't output anything
 above fs/2, so at 44.1/48 kHz `--wide` only reaches 19.8/21.6 kHz. Use `--fs 88200,96000` (to
@@ -523,6 +526,37 @@ handled in the script (see `CLAUDE.md`). One to know about: THD+N of a clipping 
 leaves the analyzer's THD+N floor ~6 dB worse until a native RMS sweep or a power cycle, so
 `thdn` clears it itself; if THD+N readings elsewhere look ~6 dB high, that's the cause.
 **Not yet run live:** `--source pc` (USB DACs), `--dut` / `--volume`, and `volsweep`.
+
+#### Without UPL‑B29: UPL‑B2, or a USB→S/PDIF interface
+
+`--source upl` needs a digital audio option on the UPL. The analyzer side of every test is the
+UPL's analog analyzer, which every UPL has, so without B29 there are two ways to feed a DAC's
+S/PDIF, optical or AES input:
+
+- **UPL‑B2** (the older digital audio option, 55 kHz clock): `--source upl` works as with B29
+  but only at **44.1 and 48 kHz** (`--fs 44100,48000`). B2 has no high-rate mode, so 88.2/96 kHz
+  aren't available. All tests run, but `jitter` also needs UPL‑B22.
+- **No digital option at all: a USB→S/PDIF interface** (USB audio device with a coax or optical
+  output) driven with `--source pc --device N`. The PC plays each tone bit-exact through it, and
+  the DAC is measured as usual. For this to be valid:
+  - the interface must pass audio **bit-exact**: WASAPI exclusive mode (the default; don't use
+    `--shared`), no resampling, no volume or DSP in its driver or control panel;
+  - its output rate must follow the file (check what the DAC reports it's locked to);
+  - the interface's own clock jitter becomes part of the measurement, and nothing here can
+    separate it from the DAC's.
+
+| Test | UPL‑B29 | UPL‑B2 | USB→S/PDIF interface (`--source pc`) |
+|---|---|---|---|
+| `check`, `fr`, `thdn`, `fft`, `imd`, `xtalk`, `zout`, `stability`, `jtest`, `multitone`, `linearity`, `imdlevel`, `filter` | yes | yes, 44.1/48 kHz | yes, any rate the interface and DAC both take |
+| `fft --images`, `fr --wide` above 20 kHz | yes | 44.1/48 kHz only, so ≤ 21.6 kHz | yes |
+| `jitter` (needs **UPL‑B22** for the jitter injection) | yes | yes, if B22 fitted | **no**: can't inject jitter |
+| `interface` (input level sweep, sample-rate lock range, word length) | yes | yes | **no**: needs the UPL's digital generator |
+| `polarity` | yes | yes | **no** (`testsignals` file 18, half-waves, with a scope instead) |
+| `jtest` as a jitter test | clean UPL clock | clean UPL clock | includes the interface's jitter |
+
+`--source pc` is written and tested offline but **not yet run live**. The B2 case is
+inferred from the manuals (B2's rate range; B29 is the high-rate version) and hasn't been tried:
+if the UPL rejects `CONF:DAI BRM` on a B2, the run lists it among the rejected commands at the end.
 
 ### Test-signal files for any DAC or player (`tools/testsignals.py`)
 
