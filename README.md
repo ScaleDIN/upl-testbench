@@ -897,3 +897,17 @@ for when that isn't available or you want a single member on stdout.)
 - **`external/`** — original R&S documentation (manuals, application notes, the factory selftest
   program) and other third-party files, not in git; see [external/README.md](external/README.md).
   `CLAUDE.md` has a topic-by-topic catalog of the application notes.
+
+## Acknowledgements
+
+This project would not exist without the diyAudio thread
+[*Rohde & Schwarz R&S UPL audio analyzer renovation*](https://www.diyaudio.com/community/threads/rohde-schwarz-r-s-upl-audio-analyzer-renovation.353461/)
+and the people in it. Most of the material everything here was built on came from there: the
+3.06 firmware, the operating and service manuals, the application notes, the UPL‑B23 coded-audio
+library, the UPA‑CD test disc, and a second unit's selftest report to compare against. Thanks to
+everyone who has shared documents, photos and hard-won repair knowledge there.
+
+Special thanks to **Bart Vande Keere** (BVKSound), who started it all. His work is used throughout
+this project: the UPL‑B23 coded-audio repack, a UPL‑B10 BASIC example, and a KiCad re-creation of
+the UPL‑B1 low-distortion generator schematics,
+[github.com/bvksound/UPL-B1](https://github.com/bvksound/UPL-B1).
